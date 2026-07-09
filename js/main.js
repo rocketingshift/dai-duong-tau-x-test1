@@ -1,89 +1,78 @@
 /**
- * main.js v5.1 — Đại Dương X
- * ─────────────────────────────────────────────────────────────────
- * • Renderer tạo MỘT LẦN, pass vào cả 2 scenes
- * • Wheel  → SET _delta (không +=), scale 0.02, decay 0.92/frame
- * • Scroll → đọc absProgress từ native scrollY
- * • Lazy-init TimelineScene tại GLOBE_END threshold
- * • Globe render làm fallback trong khi Timeline đang load
- * • GLOBE_END = 0.05 (test) / 0.28 (production)
- * ─────────────────────────────────────────────────────────────────
+ * js/main.js — v5.2
+ *
+ * Critical fixes:
+ *  ✅ GLTFLoader + KTX2Loader tạo trong main.js, truyền vào cả hai scene.init()
+ *  ✅ KTX2 basis transcoder → three@0.169.0 CDN (x1 = 404, không tự host được)
+ *  ✅ R4 = dai-duong-tau-x4  (tất cả GLB + KTX2 + envmap đều ở đây)
+ *  ✅ R1 = R4  (x1 không tồn tại; cloud0-8.webp 404 silently → no crash)
+ *  ✅ GlobeScene.update(dt, scrollFrac, phase) — 3 scalar args (không phải object)
+ *  ✅ TimelineScene: wheel → addScrollDelta() + e.preventDefault() trong TL phase
+ *  ✅ btn-enter  (confirmed index.html — không phải "enter-btn")
+ *  ✅ preloader-fill / preloader-pct  (confirmed index.html)
+ *
+ * Asset map (verified):
+ *   x1 → 404                     cloud sprites → fail silently (no clouds, no crash)
+ *   x4 → earth.glb, ship.glb, buoy.glb, seagull.glb, clouds.glb,
+ *         ocean-envmap.jpg, *.ktx2   ← tất cả 3D assets ở đây
  */
 
-import * as THREE from 'three';
-import { GlobeScene }    from './GlobeScene.js';
-import { TimelineScene } from './TimelineScene.js';
+import * as THREE            from 'three';
+import { GLTFLoader }        from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader }        from 'three/addons/loaders/KTX2Loader.js';
+import { GlobeScene }        from './GlobeScene.js';
+import { TimelineScene }     from './TimelineScene.js';
 
-// ═══════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════
-const GLOBE_END   = 0.05;   // ← 0.05 = test | 0.28 = production
-const DELTA_SCALE = 0.02;   // wheel.deltaY multiplier
-const DELTA_MAX   = 5;      // clamp delta [-5, +5]
-const DELTA_DECAY = 0.92;   // per-frame decay
-const SMOOTH_K    = 0.08;   // smoothAbs coefficient
-const SMOOTH_K2   = 0.08;   // smootherAbs coefficient
-const DELTA_K     = 0.15;   // smoothDelta coefficient
+// ─── CDN roots ────────────────────────────────────────────────────────────────
+// x4 chứa TOÀN BỘ 3D assets (earth, ship, seagull, buoy, clouds, envmap, ktx2)
+const R4 = 'https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x4@main/';
 
-// ═══════════════════════════════════════════════════════════════════
-// MUTABLE STATE
-// ═══════════════════════════════════════════════════════════════════
+// x1 = 404 → truyền R4 làm R1 luôn.
+// Cloud0-8.webp không có trong x4 → loader.load() sẽ 404 silently (caught/ignored).
+const R1 = R4;
+
+// Basis transcoder cho KTX2Loader — lấy từ three@0.169.0 CDN, không tự host.
+// Cần 2 file: basis_transcoder.js + basis_transcoder.wasm
+const BASIS_PATH = 'https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/basis/';
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+// 5% scroll = Globe phase kết thúc (test). Đổi thành 0.28 cho production.
+const GLOBE_END = 0.05;
+
+// ─── Globals ──────────────────────────────────────────────────────────────────
+let renderer, globeScene, timelineScene;
+let gltfLoader, ktx2Loader;
+const clock = new THREE.Clock();
+
 const S = {
-  // lifecycle
   entered:       false,
   timelineInit:  false,
   timelineReady: false,
   endingFired:   false,
-
-  // raw input
-  absProgress:   0,   // 0–100  (% of full scroller)
-  delta:         0,   // -5 to +5
-
-  // Globe smoothers
-  gSmoothAbs:    0,
-  gSmootherAbs:  0,
-  gSmoothDelta:  0,
-
-  // Timeline-local smoothers (remapped 0–100)
-  tProgress:     0,
-  tSmoothAbs:    0,
-  tSmootherAbs:  0,
-  tSmoothDelta:  0,
+  absProgress:   0,   // 0–100, đọc từ window.scrollY (Globe phase)
+  tlVirtual:     50,  // mirror TimelineScene._absScroll (bắt đầu từ 50)
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// THREE.JS OBJECTS
-// ═══════════════════════════════════════════════════════════════════
-let renderer, globeScene, timelineScene;
+// ─── DOM helpers ──────────────────────────────────────────────────────────────
+const $      = id => document.getElementById(id);
+const showEl = id => { const e = $(id); if (e) e.style.removeProperty('display'); };
+const hideEl = id => { const e = $(id); if (e) e.style.display = 'none'; };
 
-// ═══════════════════════════════════════════════════════════════════
-// GTM HELPER
-// ═══════════════════════════════════════════════════════════════════
+function setProgress(p) {
+  const pct  = Math.round(Math.min(1, Math.max(0, p)) * 100);
+  const fill  = $('preloader-fill');  // div.preloader__fill — thanh progress
+  const label = $('preloader-pct');   // div.preloader__pct  — text "0%"
+  if (fill)  fill.style.width  = pct + '%';
+  if (label) label.textContent = pct + '%';
+}
+
+// ─── GTM ──────────────────────────────────────────────────────────────────────
 function gtm(event, params = {}) {
   window.dataLayer = window.dataLayer || [];
   window.dataLayer.push({ event, ...params });
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// DOM HELPERS
-// ═══════════════════════════════════════════════════════════════════
-const $ = id => document.getElementById(id);
-
-/** Xóa inline display:none → fallback về CSS (flex/block/etc) */
-function showEl(id) {
-  const el = $(id);
-  if (el) el.style.removeProperty('display');
-}
-
-/** Set inline display:none */
-function hideEl(id) {
-  const el = $(id);
-  if (el) el.style.display = 'none';
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// RENDERER  (tạo 1 lần, share giữa 2 scenes)
-// ═══════════════════════════════════════════════════════════════════
+// ─── Renderer (tạo 1 lần, chia sẻ cho cả 2 scenes) ───────────────────────────
 function createRenderer() {
   renderer = new THREE.WebGLRenderer({
     canvas:          $('webgl-canvas'),
@@ -98,90 +87,67 @@ function createRenderer() {
   renderer.outputColorSpace    = THREE.SRGBColorSpace;
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// SCENE INIT
-// ═══════════════════════════════════════════════════════════════════
-async function initGlobe() {
-  globeScene = new GlobeScene(renderer);
-  await globeScene.init();
+// ─── Loaders (PHẢI tạo SAU renderer — KTX2Loader.detectSupport() cần renderer) ─
+function createLoaders() {
+  ktx2Loader = new KTX2Loader()
+    .setTranscoderPath(BASIS_PATH) // CDN basis_transcoder.js + .wasm
+    .detectSupport(renderer);      // probe GPU KTX2 support
+
+  gltfLoader = new GLTFLoader();
+  gltfLoader.setKTX2Loader(ktx2Loader); // cho phép load KTX2 embedded trong GLB
 }
 
-async function initTimeline() {
-  if (S.timelineInit) return;
+// ─── Boot Globe ───────────────────────────────────────────────────────────────
+async function bootGlobe() {
+  globeScene = new GlobeScene(renderer);
+  // ✅ FIX v5.1 bug: truyền đúng object với gltfLoader + ktx2Loader
+  await globeScene.init({
+    gltfLoader,
+    ktx2Loader,
+    R1,            // = R4 (cloud0-8.webp sẽ 404 silently — no crash)
+    R4,            // earth.glb, envmap, KTX2 textures — đều trong x4 ✓
+    onProgress: p => setProgress(p),  // cập nhật preloader 0→100%
+  });
+  console.log('[main] GlobeScene ready ✓');
+}
+
+// ─── Boot Timeline (lazy — chỉ gọi khi user vào TL phase) ────────────────────
+let _tlBooting = false;
+async function bootTimeline() {
+  if (_tlBooting || S.timelineInit) return;
+  _tlBooting    = true;
   S.timelineInit = true;
   try {
     timelineScene = new TimelineScene(renderer);
-    await timelineScene.init();
+    await timelineScene.init({
+      gltfLoader,
+      ktx2Loader,
+      R1,   // module-level R1 trong TimelineScene.js vẫn trỏ x-1 (dead) nhưng
+      R4,   // chỉ ảnh hưởng cloud sprites — load silently fails, không crash
+      onProgress: () => {},   // không cần loading screen thứ 2
+    });
     S.timelineReady = true;
-    console.log('[Timeline] ready');
+    console.log('[main] TimelineScene ready ✓');
   } catch (err) {
-    console.error('[Timeline] init failed:', err);
-    S.timelineInit = false;  // allow retry next frame
+    console.error('[main] TimelineScene boot failed:', err);
+    // Cho phép retry lần sau
+    S.timelineInit = _tlBooting = false;
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// PROGRESS HELPERS
-// ═══════════════════════════════════════════════════════════════════
-
-/** Đọc scroll progress từ native scrollY, trả về 0–100 */
-function readScrollProgress() {
-  const scroller = $('scroller');
-  if (!scroller) return 0;
-  const maxScroll = scroller.scrollHeight - window.innerHeight;
-  if (maxScroll <= 0) return 0;
-  return Math.min(100, (window.scrollY / maxScroll) * 100);
-}
-
-/**
- * Remap global scroll [GLOBE_END*100 … 100] → Timeline local [0 … 100]
- * shipX = (smootherAbs - 50) * 0.8  →  -40 … +40
- */
-function remapTimeline(globalPct) {
-  const lo = GLOBE_END * 100;
-  const hi = 100;
-  if (hi === lo) return 0;
-  return Math.max(0, Math.min(100, (globalPct - lo) / (hi - lo) * 100));
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// EVENT HANDLERS
-// ═══════════════════════════════════════════════════════════════════
-function onWheel(e) {
-  if (!S.entered) return;
-  e.preventDefault();
-  // SET delta (không +=) — clamp [-5, +5]
-  const v = e.deltaY * DELTA_SCALE;
-  S.delta = Math.max(-DELTA_MAX, Math.min(DELTA_MAX, v));
-}
-
-function onScroll() {
-  if (!S.entered) return;
-  S.absProgress = readScrollProgress();
-}
-
-function onResize() {
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  globeScene?.onResize?.();
-  timelineScene?.onResize?.();
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// ENTER SITE
-// ═══════════════════════════════════════════════════════════════════
+// ─── Enter site ───────────────────────────────────────────────────────────────
 function enterSite() {
   if (S.entered) return;
   S.entered = true;
   hideEl('introduction');
   showEl('site-header');
   showEl('scroll-indicator');
-  document.body.style.overflow = 'auto';  // unlock scroll
+  document.body.style.overflow = '';   // mở khóa scroll
+  globeScene?.startIntro();             // bắt đầu camera zoom z:14→5.2
   gtm('site_entered');
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// ENDING
-// ═══════════════════════════════════════════════════════════════════
+// ─── Ending ───────────────────────────────────────────────────────────────────
 function fireEnding() {
   if (S.endingFired) return;
   S.endingFired = true;
@@ -192,129 +158,135 @@ function fireEnding() {
   gtm('ending_reached');
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// RENDER LOOP
-// ═══════════════════════════════════════════════════════════════════
+// ─── Events ───────────────────────────────────────────────────────────────────
+function onScroll() {
+  if (!S.entered) return;
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  S.absProgress = max > 0 ? Math.min(100, (window.scrollY / max) * 100) : 0;
+}
+
+function onWheel(e) {
+  if (!S.entered) return;
+  const inTL = S.absProgress >= GLOBE_END * 100;
+
+  if (inTL && S.timelineReady) {
+    // Freeze native scroll trong TL phase — TL quản lý virtual scroll nội bộ
+    e.preventDefault();
+    timelineScene.addScrollDelta(e.deltaY, false);
+
+    // Mirror logic của TimelineScene.addScrollDelta() để detect ending
+    // speed=0.5 (isTouch=false), clamp ±1.3, *0.8
+    const d = Math.max(-1.3, Math.min(1.3, e.deltaY * 0.5));
+    S.tlVirtual = Math.max(0, Math.min(100, S.tlVirtual + d * 0.8));
+  }
+  // Globe phase: KHÔNG preventDefault → native scroll tiếp tục bình thường
+}
+
+// Touch support
+let _lastTouchY = null;
+function onTouchStart(e) {
+  _lastTouchY = e.touches[0]?.clientY ?? null;
+}
+function onTouchMove(e) {
+  if (!S.entered || _lastTouchY === null) return;
+  const inTL = S.absProgress >= GLOBE_END * 100;
+  if (inTL && S.timelineReady) {
+    e.preventDefault();
+    const curY  = e.touches[0]?.clientY ?? _lastTouchY;
+    const delta = _lastTouchY - curY;   // dương = vuốt lên = scroll forward
+    _lastTouchY = curY;
+    timelineScene.addScrollDelta(delta * 3, true);
+    const d = Math.max(-1.3, Math.min(1.3, delta * 3 * 0.8));
+    S.tlVirtual = Math.max(0, Math.min(100, S.tlVirtual + d * 0.8));
+  } else {
+    _lastTouchY = e.touches[0]?.clientY ?? _lastTouchY;
+  }
+}
+
+function onResize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  globeScene?.onResize?.();
+  timelineScene?.onResize?.();
+}
+
+// ─── Render loop ──────────────────────────────────────────────────────────────
 function tick() {
   requestAnimationFrame(tick);
-  if (!S.entered) return;
 
-  const abs  = S.absProgress;
-  const inTl = abs >= GLOBE_END * 100;
+  // getDelta() LUÔN phải gọi mỗi frame để clock không bị tích lũy
+  const dt = Math.min(clock.getDelta(), 0.05); // cap 50ms — tránh jump khi tab bị ẩn
 
-  // ── Per-frame delta decay ────────────────────────────────────────
-  S.delta *= DELTA_DECAY;
+  if (!S.entered) return; // chưa enter → không render gì
 
-  // ── Globe smoothers (always updated for seamless transition) ─────
-  S.gSmoothAbs   += (abs           - S.gSmoothAbs)   * SMOOTH_K;
-  S.gSmootherAbs += (S.gSmoothAbs  - S.gSmootherAbs) * SMOOTH_K2;
-  S.gSmoothDelta += (S.delta       - S.gSmoothDelta) * DELTA_K;
+  const inTL = S.absProgress >= GLOBE_END * 100;
 
-  // ── Branch: Globe vs Timeline ─────────────────────────────────────
-  if (!inTl) {
-    // ── GLOBE SCENE ────────────────────────────────────────────────
-    const gPct = abs / (GLOBE_END * 100);  // 0–1
-    globeScene?.update({
-      progress:    Math.min(1, gPct),
-      delta:       S.gSmoothDelta,
-      smoothAbs:   S.gSmoothAbs,
-      smootherAbs: S.gSmootherAbs,
-    });
+  if (!inTL) {
+    // ── GLOBE PHASE ────────────────────────────────────────────────────────
+    // scrollFrac = 0 (đầu) → 1 (kết thúc globe phase)
+    const scrollFrac = Math.min(1, S.absProgress / (GLOBE_END * 100));
+    globeScene?.update(dt, scrollFrac, 'scroll');  // (dt, scrollFrac, phase)
     globeScene?.render();
 
   } else {
-    // ── TIMELINE SCENE ─────────────────────────────────────────────
-
-    // Lazy-init (fire-and-forget, không block render loop)
-    if (!S.timelineInit) initTimeline();
-
-    // Timeline-local smooth values
-    const tRaw = remapTimeline(abs);
-    S.tSmoothAbs   += (tRaw          - S.tSmoothAbs)   * SMOOTH_K;
-    S.tSmootherAbs += (S.tSmoothAbs  - S.tSmootherAbs) * SMOOTH_K2;
-    S.tSmoothDelta += (S.delta       - S.tSmoothDelta) * DELTA_K;
+    // ── TIMELINE PHASE ─────────────────────────────────────────────────────
+    if (!S.timelineInit) bootTimeline(); // lazy-init lần đầu
 
     if (S.timelineReady) {
-      timelineScene.update({
-        absProgress:  tRaw,              // 0–100 timeline-local
-        smoothAbs:    S.tSmoothAbs,
-        smootherAbs:  S.tSmootherAbs,   // used by shipX formula
-        smoothDelta:  S.tSmoothDelta,
-        delta:        S.delta,
-      });
+      timelineScene.update(dt);   // TL quản lý scroll state nội bộ qua addScrollDelta
       timelineScene.render();
+      if (!S.endingFired && S.tlVirtual >= 98) fireEnding();
     } else {
-      // Timeline đang load → globe làm fallback
+      // Fallback: giữ Globe trong khi TL assets đang stream (ship.glb = 8MB!)
       globeScene?.render();
     }
-
-    // Ending trigger
-    if (abs >= 99.5) fireEnding();
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// PRELOADER → INTRO
-// ═══════════════════════════════════════════════════════════════════
-async function onAssetsLoaded() {
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+async function main() {
+  document.body.style.overflow = 'hidden'; // lock scroll cho đến khi user click Enter
+
+  createRenderer();
+  createLoaders();
+
+  // Load Globe assets → preloader progress 0→100%
+  await bootGlobe();
+  setProgress(1.0);
+
+  // Flash "100%" rồi ẩn preloader
+  await new Promise(r => setTimeout(r, 350));
   hideEl('preloader');
   showEl('introduction');
 
-  // Tìm enter button theo nhiều selector
-  const btn =
-    $('enter-btn') ||
-    document.querySelector('#introduction button') ||
-    document.querySelector('#introduction [role="button"]') ||
-    document.querySelector('#introduction a');
-
-  if (btn) {
-    btn.addEventListener('click', enterSite, { once: true });
+  // Enter button — ID = "btn-enter" (confirmed index.html, KHÔNG phải "enter-btn")
+  const btnEnter = $('btn-enter');
+  if (btnEnter) {
+    btnEnter.addEventListener('click', enterSite, { once: true });
   } else {
-    // Fallback: click anywhere trên intro
+    // Fallback nếu button bị remove
     $('introduction')?.addEventListener('click', enterSite, { once: true });
   }
-}
 
-// ═══════════════════════════════════════════════════════════════════
-// BOOT
-// ═══════════════════════════════════════════════════════════════════
-async function main() {
-  // Lock scroll cho đến khi user nhấn Enter
-  // NOTE: chỉ lock body, KHÔNG lock documentElement (gây bug trên Safari)
-  document.body.style.overflow = 'hidden';
-
-  // Show preloader
-  showEl('preloader');
-
-  // Tạo renderer
-  createRenderer();
-
-  // Init Globe (await — phải xong trước khi render loop bắt đầu)
-  await initGlobe();
-
-  // Register events
-  window.addEventListener('wheel',  onWheel,  { passive: false });
-  window.addEventListener('scroll', onScroll, { passive: true  });
-  window.addEventListener('resize', onResize, { passive: true  });
-
-  // Share button
-  $('ui-share')?.addEventListener('click', () => {
+  // Share button — id="btn-share" nằm trong id="ui-share"
+  $('btn-share')?.addEventListener('click', () => {
     gtm('share_clicked');
     if (navigator.share) {
-      navigator.share({ title: 'Đại Dương X', url: location.href }).catch(() => {});
+      navigator.share({ title: 'OceanX 2025 In Review', url: location.href })
+        .catch(() => {});
     } else {
       navigator.clipboard?.writeText(location.href).catch(() => {});
     }
   });
 
-  // GTM: site loaded
+  // Listeners
+  window.addEventListener('wheel',      onWheel,      { passive: false });
+  window.addEventListener('scroll',     onScroll,     { passive: true  });
+  window.addEventListener('touchstart', onTouchStart, { passive: true  });
+  window.addEventListener('touchmove',  onTouchMove,  { passive: false });
+  window.addEventListener('resize',     onResize,     { passive: true  });
+
   gtm('site_loaded');
-
-  // Show intro screen
-  await onAssetsLoaded();
-
-  // Bắt đầu render loop (idle cho đến khi S.entered = true)
-  tick();
+  tick(); // bắt đầu loop (không render gì cho đến khi S.entered = true)
 }
 
-main().catch(err => console.error('[main] boot error:', err));
+main().catch(err => console.error('[main] fatal boot error:', err));
