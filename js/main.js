@@ -37,27 +37,29 @@ const elScrollInd    = document.getElementById('scroll-indicator');
 /* ─── Scene transition overlay (created in JS) ───────────── */
 const overlay = document.createElement('div');
 Object.assign(overlay.style, {
-  position:   'fixed', inset: '0',
-  background: '#07192d',
-  opacity:    '0',
-  transition: 'opacity 0.6s ease',
+  position:      'fixed',
+  inset:         '0',
+  background:    '#07192d',
+  opacity:       '0',
+  transition:    'opacity 0.6s ease',
   pointerEvents: 'none',
-  zIndex:     '50',
+  zIndex:        '50',
 });
 document.body.appendChild(overlay);
 
 /* ─── Scroll ─────────────────────────────────────────────── */
 const LAMBDA = 6;
-let rawScroll  = 0;
-let smoothScr  = 0;
-let isTouch    = false;
-let lastRaw    = 0;
+let rawScroll = 0;
+let smoothScr = 0;
+let isTouch   = false;
+let lastRaw   = 0;
 
 window.addEventListener('scroll', () => { rawScroll = window.scrollY; }, { passive: true });
 
 let _ty = 0;
 window.addEventListener('touchstart', e => {
-  _ty = e.touches[0].clientY; isTouch = true;
+  _ty = e.touches[0].clientY;
+  isTouch = true;
 }, { passive: true });
 window.addEventListener('touchmove', e => {
   const dy = _ty - e.touches[0].clientY;
@@ -66,20 +68,20 @@ window.addEventListener('touchmove', e => {
 }, { passive: true });
 
 /* ─── Scene config ───────────────────────────────────────── */
-// TEST VALUES — đổi lại GLOBE_END=0.28, TRANS_WIDTH=0.04 sau khi có chapter markers
-const GLOBE_END      = 0.05; // Globe zone: 0% → 5% scroll (~125vh)
-const TRANS_WIDTH    = 0.01; // Crossfade:  5% → 6% scroll
+// TEST VALUES — restore GLOBE_END=0.28, TRANS_WIDTH=0.04 after chapter markers added
+const GLOBE_END      = 0.05; // Globe zone: 0% → 5% of scroll (~125vh)
+const TRANS_WIDTH    = 0.01; // Crossfade zone: 5% → 6%
 const TIMELINE_START = GLOBE_END + TRANS_WIDTH; // Timeline: 6% → 100%
 
 let phase       = 'preload';
-let activeScene = 'globe'; // 'globe' | 'transition' | 'timeline'
+let activeScene = 'globe'; // 'globe' | 'timeline'
 let transitioning = false;
 
 /* ─── Scenes ─────────────────────────────────────────────── */
 const globeScene    = new GlobeScene(renderer);
 const timelineScene = new TimelineScene(renderer);
 
-/* ─── Progress ───────────────────────────────────────────── */
+/* ─── UI helpers ─────────────────────────────────────────── */
 function setProgress(frac) {
   const pct = Math.round(frac * 100);
   elPreloader.querySelectorAll('*').forEach(el => {
@@ -109,14 +111,12 @@ function switchToTimeline() {
   if (transitioning || activeScene === 'timeline') return;
   transitioning = true;
 
-  // Fade to dark
   overlay.style.opacity = '1';
   setTimeout(() => {
     activeScene = 'timeline';
-    // Show header + scroll indicator after switching
+    hideUI(elIntroduction);  // BUG FIX: hide globe intro text when switching
     showUI(elHeader);
     showUI(elScrollInd, 800);
-    // Fade back
     overlay.style.opacity = '0';
     setTimeout(() => { transitioning = false; }, 650);
   }, 620);
@@ -131,7 +131,7 @@ function switchToGlobe() {
     activeScene = 'globe';
     hideUI(elHeader);
     hideUI(elScrollInd);
-    overlay.style.opacity = '0';
+    showUI(elIntroduction);  // restore intro when scrolling back tooverlay.style.opacity = '0';
     setTimeout(() => { transitioning = false; }, 650);
   }, 620);
 }
@@ -139,10 +139,9 @@ function switchToGlobe() {
 /* ─── Init ───────────────────────────────────────────────── */
 const loaderOpts = { gltfLoader, ktx2Loader, R1, R4 };
 
-// Load Globe first (shown in preloader)
+// Load Globe first (shown during preloader)
 globeScene.init({ ...loaderOpts, onProgress: setProgress })
   .then(() => {
-    // Show intro immediately
     elPreloader.style.transition = 'opacity 0.8s ease';
     elPreloader.style.opacity    = '0';
     setTimeout(() => {
@@ -152,7 +151,7 @@ globeScene.init({ ...loaderOpts, onProgress: setProgress })
       globeScene.startIntro();
     }, 800);
 
-    // Load Timeline in background (no spinner needed)
+    // Load Timeline in background (silent)
     return timelineScene.init({ ...loaderOpts, onProgress: null });
   })
   .then(() => {
@@ -167,7 +166,7 @@ globeScene.init({ ...loaderOpts, onProgress: setProgress })
 /* ─── Clock ──────────────────────────────────────────────── */
 const clock = new THREE.Clock();
 
-/* ─── Loop ───────────────────────────────────────────────── */
+/* ─── Main loop ──────────────────────────────────────────── */
 (function loop() {
   requestAnimationFrame(loop);
 
@@ -178,35 +177,33 @@ const clock = new THREE.Clock();
   const scrollH    = Math.max(elScroller.scrollHeight - window.innerHeight, 1);
   const scrollFrac = Math.min(smoothScr / scrollH, 1);
 
-  // Scroll delta for timeline (raw per-frame change)
+  // Per-frame raw scroll delta (in viewport height units)
   const rawDelta = (rawScroll - lastRaw) / window.innerHeight;
   lastRaw = rawScroll;
 
-  /* ── Route to active scene ─────────────────────────────── */
+  /* ── Route by scroll fraction ──────────────────────────── */
   if (scrollFrac < GLOBE_END) {
-    // Globe zone
-    if (activeScene !== 'globe') switchToGlobe();
+    // ── Globe zone ──
+    if (activeScene !== 'globe' && !transitioning) switchToGlobe();
     const localFrac = scrollFrac / GLOBE_END;
     globeScene.update(dt, localFrac, phase);
     globeScene.render();
 
   } else if (scrollFrac < TIMELINE_START) {
-    // Transition zone (crossfade triggered once)
+    // ── Crossfade zone — trigger switch once ──
     if (activeScene === 'globe' && !transitioning) switchToTimeline();
-
-    // While transitioning, keep rendering globe
+    // Keep rendering whichever scene is active during crossfade
     if (activeScene === 'globe' || transitioning) {
       globeScene.update(dt, 1.0, phase);
       globeScene.render();
     } else {
-      const localFrac = (scrollFrac - TIMELINE_START) / (1 - TIMELINE_START);
       timelineScene.addScrollDelta(rawDelta, isTouch);
-      timelineScene.update(dt, Math.max(0, localFrac), phase);
+      timelineScene.update(dt, 0, phase);
       timelineScene.render();
     }
 
   } else {
-    // Timeline zone
+    // ── Timeline zone ──
     if (activeScene !== 'timeline' && !transitioning) switchToTimeline();
     const localFrac = (scrollFrac - TIMELINE_START) / (1 - TIMELINE_START);
     timelineScene.addScrollDelta(rawDelta, isTouch);
