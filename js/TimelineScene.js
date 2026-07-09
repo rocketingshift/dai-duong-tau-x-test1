@@ -1,272 +1,383 @@
-// js/TimelineScene.js — Ship + Ocean timeline scene
+// js/TimelineScene.js — v4
+// Fixes: cinematic camera (NOT top-down), ship auto-scale to 3 units,
+//        dark navy materials, ocean color #021436, 4 seagulls
 import * as THREE from 'three';
-import { Water }  from './Water.js';
+import { Water } from './Water.js';
 
 export class TimelineScene {
-  /**
-   * @param {THREE.WebGLRenderer} renderer  Shared renderer — NEVER reassigned.
-   */
   constructor(renderer) {
-    this.renderer = renderer; // set once, never changed
+    this.renderer = renderer;
 
-    /* ── Scene ───────────────────────────────────────────── */
+    // ── Scene ──────────────────────────────────────────────
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x07192d);
-    this.scene.fog = new THREE.FogExp2(0x07192d, 0.018);
+    this.scene.fog = new THREE.FogExp2(0x061526, 0.016);
 
-    /* ── Camera: FOV=10 (telephoto, semi-top-down) ────────── */
+    // ── Camera — cinematic side/low angle (NOT top-down) ──
+    // y=10, z=22 → ~25° down angle, horizon + ocean visible
     this.camera = new THREE.PerspectiveCamera(
-      10,
+      45,
       window.innerWidth / window.innerHeight,
-      0.1, 500
+      0.1,
+      1000
     );
-    this.camera.position.set(0, 30, 15);
-    this.camera.lookAt(0, 0, 0);
+    this.camera.position.set(0, 10, 22);
+    this.camera.lookAt(0, 2, 0);
 
-    /* ── Smooth scroll state (spec-accurate names) ────────── */
-    this._smoothAbs    = 0;   // single-smoothed abs scroll (0-100)
-    this._smootherAbs  = 0;   // double-smoothed abs scroll — drives ship journey
-    this._delta        = 0;   // instantaneous scroll velocity (bounded, decays to 0)
-    this._smoothDelta  = 0;   // smoothed velocity → camera sway
-    this._camX         = 0;   // camera X sway offset
-    this._camY         = 0;   // camera Y sway offset
-    this._lookX        = 0;   // lookAt X sway offset
+    // ── Scroll state ───────────────────────────────────────
+    this._delta      = 0;
+    this._absScroll  = 50;   // 0–100, starts centered
+    this.smoothAbs   = 50;
+    this.smootherAbs = 50;
+    this.delta       = 0;
+    this.smoothDelta = 0;
+    this.camX        = 0;
+    this.camY        = 0;
+    this.lookX       = 0;
 
-    /* ── Lights (spec: dir white 5.0, pos 1.8/7.7/-6.1) ──── */
-    this._setupLights();
-
-    /* ── Water ───────────────────────────────────────────── */
-    this._water = new Water();
-    this.scene.add(this._water.build());
-
-    /* ── State ───────────────────────────────────────────── */
-    this._ship    = null;
-    this._seagull = null;
-    this._buoy    = null;
+    // ── Objects ────────────────────────────────────────────
+    this.ship     = null;
+    this.seagulls = [];
+    this.buoy     = null;
+    this.water    = null;
+    this.mixers   = [];
     this._ready   = false;
-    this._clock   = 0;
   }
 
-  /* ── Lights ──────────────────────────────────────────── */
-  _setupLights() {
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-
-    const dir = new THREE.DirectionalLight(0xffffff, 5);
-    dir.position.set(1.8, 7.7, -6.1);
-    dir.castShadow             = true;
-    dir.shadow.mapSize.width   = 1024;
-    dir.shadow.mapSize.height  = 1024;
-    dir.shadow.camera.near     = 4;
-    dir.shadow.camera.far      = 14;
-    dir.shadow.camera.left     = -6.5;
-    dir.shadow.camera.right    =  6.5;
-    dir.shadow.camera.top      =  6.5;
-    dir.shadow.camera.bottom   = -6.5;
-    dir.shadow.bias            = -0.0001;
-    this.scene.add(dir);
-    this._dirLight = dir;
-  }
-
-  /* ── Public API ──────────────────────────────────────── */
-
+  // ─────────────────────────────────────────────────────────
   async init({ gltfLoader, ktx2Loader, R1, R4, onProgress }) {
-    const tl = new THREE.TextureLoader();
-    onProgress?.(0.0);
+    const scene = this.scene;
 
-    /* 1. Environment map */
+    // ── Lights ─────────────────────────────────────────────
+    const sun = new THREE.DirectionalLight(0xb8cadf, 2.3);
+    sun.position.set(5, 8, 5);
+    scene.add(sun);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+    const rim = new THREE.DirectionalLight(0x90e0ef, 0.5);
+    rim.position.set(-4, 3, -4);
+    scene.add(rim);
+
+    // ── Env map (ocean-envmap.jpg) ─────────────────────────
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    pmrem.compileEquirectangularShader();
+    new THREE.TextureLoader().load(
+      R4 + 'ocean-envmap.jpg',
+      tex => {
+        scene.environment = pmrem.fromEquirectangular(tex).texture;
+        tex.dispose();
+        pmrem.dispose();
+      }
+    );
+
+    // ── Water ──────────────────────────────────────────────
+    // Water normals from Three.js CDN (jsDelivr r175)
+    const wNormals = new THREE.TextureLoader().load(
+      'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r175/examples/textures/waternormals.jpg',
+      t => { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+    );
+
     try {
-      const envTex = await new Promise((res, rej) =>
-        tl.load(R4 + 'ocean-envmap.jpg', res, undefined, rej)
+      const wGeo = new THREE.PlaneGeometry(400, 400, 64, 64);
+      this.water = new Water(wGeo, {
+        textureWidth   : 512,
+        textureHeight  : 512,
+        waterNormals   : wNormals,
+        sunDirection   : new THREE.Vector3(5, 8, 5).normalize(),
+        sunColor       : 0xb8cadf,
+        waterColor     : 0x021436,   // ← design token: deep navy
+        distortionScale: 2.5,
+        fog            : true,
+      });
+      this.water.rotation.x = -Math.PI / 2;
+      this.water.position.y = -0.05;
+      scene.add(this.water);
+    } catch (_) {
+      // Fallback: flat dark plane
+      const flatMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(400, 400),
+        new THREE.MeshStandardMaterial({
+          color    : 0x021436,
+          roughness: 0.05,
+          metalness: 0.85,
+        })
       );
-      envTex.mapping = THREE.EquirectangularReflectionMapping;
-      const pmrem = new THREE.PMREMGenerator(this.renderer); // local var — renderer safe
-      pmrem.compileEquirectangularShader();
-      const envMap = pmrem.fromEquirectangular(envTex).texture;
-      pmrem.dispose();
-      envTex.dispose();
-      this.scene.environment          = envMap;
-      this.scene.environmentIntensity = 0.5;
-      this._water.setEnvMap(envMap);
-      console.log('[TimelineScene] envmap ✓');
-    } catch(e) {
-      console.warn('[TimelineScene] envmap failed:', e.message);
+      flatMesh.rotation.x = -Math.PI / 2;
+      flatMesh.position.y = -0.05;
+      scene.add(flatMesh);
+      this.water = flatMesh;
     }
-    onProgress?.(0.25);
 
-    /* 2. Ship */
-    await this._loadModel(gltfLoader, R4 + 'ship.glb',
-      gltf => {
-        this._ship = gltf.scene;
-        this._ship.traverse(c => {
-          if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
-        });
-        this._ship.position.set(0, 0.05, 0);
-        this._ship.scale.setScalar(1);
-        this.scene.add(this._ship);
-        console.log('[TimelineScene] ship.glb ✓');
-      },
-      () => {
-        this._ship = this._makeFallbackShip();
-        this.scene.add(this._ship);
-        console.warn('[TimelineScene] using fallback ship');
-      }
-    );
-    onProgress?.(0.60);
+    // ── Ship ───────────────────────────────────────────────
+    await new Promise(resolve => {
+      gltfLoader.load(R4 + 'ship.glb', gltf => {
+        const model = gltf.scene;
 
-    /* 3. Seagull (optional) */
-    await this._loadModel(gltfLoader, R4 + 'seagull.glb',
-      gltf => {
-        this._seagull = gltf.scene;
-        this._seagull.scale.setScalar(0.25);
-        this.scene.add(this._seagull);
-        console.log('[TimelineScene] seagull.glb ✓');
-      }
-    );
-    onProgress?.(0.80);
+        // Auto-scale → target longest dimension = 3.0 world units
+        const box  = new THREE.Box3().setFromObject(model);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const sf = 3.0 / Math.max(size.x, size.y, size.z, 0.001);
+        model.scale.setScalar(sf);
 
-    /* 4. Buoy (optional) */
-    await this._loadModel(gltfLoader, R4 + 'buoy.glb',
-      gltf => {
-        this._buoy = gltf.scene;
-        this._buoy.scale.setScalar(0.3);
-        this.scene.add(this._buoy);
-        console.log('[TimelineScene] buoy.glb ✓');
-      }
-    );
-    onProgress?.(1.0);
+        // Sit exactly on waterline (y=0)
+        const box2 = new THREE.Box3().setFromObject(model);
+        model.position.y = -box2.min.y;
 
-    this._ready = true;
-    console.log('[TimelineScene] ready ✓');
-  }
+        // Apply PBR materials (no ship KTX2 available)
+        this._applyShipMaterials(model);
 
-  /* ── Generic loader with optional fallback ─────────── */
-  _loadModel(gltfLoader, url, onSuccess, onFail) {
-    return new Promise(resolve => {
-      gltfLoader.load(url, gltf => {
-        try { onSuccess(gltf); } catch(e) { console.error(e); }
+        this.ship = model;
+        scene.add(model);
         resolve();
       }, undefined, err => {
-        console.warn('[TimelineScene] load failed:', url, err?.message ?? err);
-        onFail?.();
-        resolve(); // non-fatal — carry on
+        console.warn('[TS] ship.glb failed:', err);
+        resolve();
       });
+    });
+
+    // ── Seagulls — 4 birds ─────────────────────────────────
+    await new Promise(resolve => {
+      gltfLoader.load(R4 + 'seagull.glb', gltf => {
+        const template = gltf.scene;
+        const anims    = gltf.animations || [];
+
+        // Seagull diffuse texture (try KTX2, fallback white)
+        const applyTex = (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          template.traverse(m => {
+            if (m.isMesh) {
+              m.material = new THREE.MeshStandardMaterial({
+                map      : tex,
+                roughness: 0.85,
+                metalness: 0.0,
+                side     : THREE.DoubleSide,
+              });
+            }
+          });
+        };
+        const applyFallback = () => {
+          template.traverse(m => {
+            if (m.isMesh) {
+              m.material = new THREE.MeshStandardMaterial({
+                color    : 0xd0d8e4,   // pale gull white
+                roughness: 0.85,
+                metalness: 0.0,
+              });
+            }
+          });
+        };
+
+        if (ktx2Loader) {
+          ktx2Loader.load(R4 + 'seagull_diffuse.ktx2', applyTex,
+            undefined, applyFallback);
+        } else {
+          applyFallback();
+        }
+
+        // Auto-scale seagull → wingspan ≈ 0.45 world units
+        const sgBox  = new THREE.Box3().setFromObject(template);
+        const sgSize = new THREE.Vector3();
+        sgBox.getSize(sgSize);
+        const sgSF = 0.45 / Math.max(sgSize.x, sgSize.z, 0.001);
+        template.scale.setScalar(sgSF);
+
+        // 4 birds: [relX, relY, relZ, orbitSpeed, phaseOffset]
+        const configs = [
+          [  1.5,  2.5,  1.2, 0.28, 0.00 ],
+          [ -1.2,  3.0, -0.8, 0.22, 1.80 ],
+          [  3.0,  3.8,  0.4, 0.35, 0.95 ],
+          [ -2.2,  3.2,  1.8, 0.25, 3.20 ],
+        ];
+
+        configs.forEach(([rx, ry, rz, spd, ph]) => {
+          const bird       = template.clone(true);
+          bird.userData    = { rx, ry, rz, spd, ph };
+
+          if (anims.length > 0) {
+            const mx = new THREE.AnimationMixer(bird);
+            anims.forEach(clip => {
+              const action = mx.clipAction(clip);
+              action.play();
+            });
+            mx.timeScale = 0.8 + Math.random() * 0.5;
+            this.mixers.push(mx);
+          }
+
+          this.seagulls.push(bird);
+          scene.add(bird);
+        });
+
+        resolve();
+      }, undefined, err => {
+        console.warn('[TS] seagull.glb failed:', err);
+        resolve();
+      });
+    });
+
+    // ── Buoy ───────────────────────────────────────────────
+    await new Promise(resolve => {
+      gltfLoader.load(R4 + 'buoy.glb', gltf => {
+        const buoy = gltf.scene;
+
+        const bBox  = new THREE.Box3().setFromObject(buoy);
+        const bSize = new THREE.Vector3();
+        bBox.getSize(bSize);
+        buoy.scale.setScalar(0.5 / Math.max(bSize.y, 0.001));
+
+        if (ktx2Loader) {
+          ktx2Loader.load(R4 + 'bouy_diffuse.ktx2', tex => {
+            tex.colorSpace = THREE.SRGBColorSpace;
+            buoy.traverse(m => {
+              if (m.isMesh && m.material) {
+                m.material.map = tex;
+                m.material.needsUpdate = true;
+              }
+            });
+          });
+        }
+
+        buoy.position.set(8, 0, -2);
+        this.buoy = buoy;
+        scene.add(buoy);
+        resolve();
+      }, undefined, err => {
+        console.warn('[TS] buoy.glb failed:', err);
+        resolve();
+      });
+    });
+
+    this._ready = true;
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Apply PBR materials to ship mesh by vertical position
+  // Hull bottom → dark red-brown | hull mid → dark navy
+  // superstructure → white/off-white | accents → orange
+  // ─────────────────────────────────────────────────────────
+  _applyShipMaterials(model) {
+    const box    = new THREE.Box3().setFromObject(model);
+    const totalH = box.max.y - box.min.y;
+
+    model.traverse(mesh => {
+      if (!mesh.isMesh) return;
+
+      const name = (mesh.name || '').toLowerCase();
+      const mBox = new THREE.Box3().setFromObject(mesh);
+      const midY = (mBox.min.y + mBox.max.y) * 0.5;
+      const relY = totalH > 0 ? (midY - box.min.y) / totalH : 0.5;
+
+      let color, roughness = 0.75, metalness = 0.15;
+
+      // ── Vertical zone defaults ──
+      if      (relY < 0.12) { color = 0x5c1a10; roughness = 0.9;  metalness = 0.05; } // keel/bilge: anti-fouling red
+      else if (relY < 0.40) { color = 0x0a1628; roughness = 0.70; metalness = 0.20; } // main hull: dark navy
+      else if (relY < 0.65) { color = 0x0e2040; roughness = 0.68; metalness = 0.18; } // mid-body: navy
+      else                  { color = 0xdde4e8; roughness = 0.55; metalness = 0.10; } // superstructure: off-white
+
+      // ── Name overrides ──
+      if      (name.includes('orange') || name.includes('stripe') || name.includes('band'))
+                            { color = 0xff7438; roughness = 0.70; metalness = 0.0;  }
+      else if (name.includes('glass') || name.includes('window'))
+                            { color = 0x5bbfdd; roughness = 0.05; metalness = 0.90; }
+      else if (name.includes('metal') || name.includes('crane')
+            || name.includes('mast')  || name.includes('antenna'))
+                            { color = 0x3a4a5c; roughness = 0.35; metalness = 0.80; }
+
+      mesh.material      = new THREE.MeshStandardMaterial({ color, roughness, metalness });
+      mesh.castShadow    = false;
+      mesh.receiveShadow = false;
     });
   }
 
-  /* ── Fallback ship geometry ─────────────────────────── */
-  _makeFallbackShip() {
-    const g = new THREE.Group();
-    const hull = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 0.45, 4.5),
-      new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.4 })
-    );
-    hull.position.y = 0.22;
-    hull.castShadow = true;
-    g.add(hull);
-    const bridge = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.65, 1.1),
-      new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.4 })
-    );
-    bridge.position.set(0, 0.75, -0.6);
-    bridge.castShadow = true;
-    g.add(bridge);
-    return g;
-  }
-
-  /* ── Scroll input (called per frame from main.js) ────── */
+  // ─────────────────────────────────────────────────────────
   addScrollDelta(rawDelta, isTouch) {
-    const speed = isTouch ? 10 : 25;
-    const clamped = Math.max(-1.3, Math.min(1.3, rawDelta * speed));
-    // BUG FIX: SET (not +=) — delta is instantaneous velocity, bounded ±1.3
-    // Without this fix camX accumulates → ship flies off screen
-    this._delta = clamped;
+    const speed     = isTouch ? 0.8 : 0.5;
+    this._delta     = Math.max(-1.3, Math.min(1.3, rawDelta * speed));
+    this._absScroll = Math.max(0, Math.min(100,
+      this._absScroll + this._delta * 0.8
+    ));
   }
 
-  /* ── Per-frame update ────────────────────────────────── */
-  update(dt, scrollFrac, phase) {
+  // ─────────────────────────────────────────────────────────
+  update(dt, localFrac, phase) {
     if (!this._ready) return;
-    this._clock += dt;
 
-    const nDelta   = dt * 60; // normalize deltas to 60fps
-    const absScroll = scrollFrac * 100; // 0-100
+    const nDelta = Math.min(dt * 60, 3);
 
-    /* ── Scroll smoothing chain (spec-accurate) ──────────── */
-    this._smoothAbs   += (absScroll         - this._smoothAbs)   * 0.1  * nDelta;
-    this._smootherAbs += (this._smoothAbs   - this._smootherAbs) * 0.1  * nDelta;
-    this._delta       += (0                 - this._delta)        * 0.01 * nDelta;
-    this._smoothDelta += (this._delta       - this._smoothDelta)  * 0.03 * nDelta;
-    this._camX        += (this._smoothDelta - this._camX)         * 0.06 * nDelta;
-    this._camY        += (this._smoothDelta - this._camX)         * 0.10 * nDelta; // camX intentional per spec
-    this._lookX       += (this._smoothDelta - this._lookX)        * 0.07 * nDelta;
+    // ── Smooth scroll chain ───────────────────────────────
+    this.smoothAbs   += (this._absScroll  - this.smoothAbs)   * 0.10 * nDelta;
+    this.smootherAbs += (this.smoothAbs   - this.smootherAbs) * 0.10 * nDelta;
+    this.smoothDelta += (this._delta      - this.smoothDelta)  * 0.03 * nDelta;
+    this.camX        += (this.smoothDelta - this.camX)         * 0.06 * nDelta;
+    this.camY        += (this.smoothDelta - this.camX)         * 0.10 * nDelta;
+    this.lookX       += (this.smoothDelta - this.lookX)        * 0.07 * nDelta;
 
-    /* ── Ship journey position along X (driven by smootherAbs) ──
-       smootherAbs: 0-100 → ship travels from -40 to +40 world units
-       Ocean plane (100×100) stays at origin — always in frame ── */
-    const TRAVEL_SCALE = 0.8; // 1 unit per % of scroll
-    const shipX = (this._smootherAbs - 50) * TRAVEL_SCALE; // -40 → +40
+    // Decay per-frame delta
+    this._delta *= 0.88;
 
-    const t = this._clock;
+    // ── Ship journey: -40 → +40 units X ──────────────────
+    const shipX = (this.smootherAbs - 50) * 0.8;
 
-    /* ── Ship: position + bob + roll ─────────────────────── */
-    if (this._ship) {
-      this._ship.position.x = shipX;
-      this._ship.position.y = 0.05 + Math.sin(t * 0.9) * 0.04;
-      this._ship.rotation.z = Math.sin(t * 0.7) * 0.018;
-      this._ship.rotation.x = Math.sin(t * 0.5) * 0.008;
-      // Subtle yaw lean in direction of travel (follows scroll velocity)
-      this._ship.rotation.y = -this._smoothDelta * 0.04;
+    if (this.ship) {
+      this.ship.position.x = shipX;
+      this.ship.position.y = 0;
+      this.ship.rotation.y = -this.smoothDelta * 0.12;  // gentle yaw
     }
 
-    /* ── Seagull: circle orbit relative to ship ──────────── */
-    if (this._seagull) {
-      const st = t * 0.5;
-      this._seagull.position.x = shipX + Math.sin(st) * 3.5;
-      this._seagull.position.z = Math.cos(st) * 2.0 - 1;
-      this._seagull.position.y = 3.5 + Math.sin(st * 2.1) * 0.4;
-      this._seagull.rotation.y = -st + Math.PI;
+    // ── Seagulls — lazy orbit around ship ────────────────
+    const t = performance.now() * 0.001;
+    this.seagulls.forEach(bird => {
+      const { rx, ry, rz, spd, ph } = bird.userData;
+      const ang = t * spd + ph;
+      bird.position.set(
+        shipX + rx + Math.sin(ang * 1.7) * 1.2,
+        ry    + Math.sin(t * spd * 1.3 + ph) * 0.25,
+        rz    + Math.cos(ang) * 0.9
+      );
+      // Face direction of travel
+      const dx = Math.cos(ang * 1.7) * 1.7 * 1.2;
+      const dz = -Math.sin(ang) * 0.9;
+      bird.rotation.y = Math.atan2(dx, dz);
+    });
+
+    // ── Buoy — gentle bob ────────────────────────────────
+    if (this.buoy) {
+      this.buoy.position.x = shipX + 8;
+      this.buoy.position.y = Math.sin(t * 0.7) * 0.08;
     }
 
-    /* ── Buoy: bobs near ship ────────────────────────────── */
-    if (this._buoy) {
-      this._buoy.position.x = shipX + 4;
-      this._buoy.position.y = 0.1 + Math.sin(t * 1.1) * 0.06;
-      this._buoy.position.z = 2;
-      this._buoy.rotation.z = Math.sin(t * 0.8) * 0.03;
+    // ── Water time uniform ────────────────────────────────
+    if (this.water?.material?.uniforms?.['time']) {
+      this.water.material.uniforms['time'].value += dt;
     }
 
-    /* ── Camera: follows ship + velocity sway ────────────── */
-    // camX/camY/lookX stay bounded (max ±1.3) — ship stays in frame
+    // ── Wing flap mixers ──────────────────────────────────
+    this.mixers.forEach(m => m.update(dt));
+
+    // ── Camera — cinematic low angle ──────────────────────
+    // y=10 → shows horizon; z=22 → enough ocean visible
     this.camera.position.set(
-      shipX + this._camX,          // follow ship X + tiny sway
-      30 + this._camY * 0.4,       // base height + tiny lean
-      15
+      shipX + this.camX * 0.5,
+      10 + this.camY * 0.3,
+      22
     );
     this.camera.lookAt(
-      shipX + this._lookX * 0.5,   // look slightly ahead of ship
-      0,
+      shipX + this.lookX * 0.5,
+      2,   // look at sea level, not y=0 (water surface)
       0
     );
-
-    /* ── Water animation ─────────────────────────────────── */
-    this._water.update(dt);
   }
 
+  // ─────────────────────────────────────────────────────────
   render() {
+    if (!this._ready) return;
     this.renderer.render(this.scene, this.camera);
   }
 
   onResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-  }
-
-  dispose() {
-    this._water.dispose();
-    this.scene.traverse(o => {
-      if (!o.isMesh) return;
-      o.geometry?.dispose();
-      (Array.isArray(o.material) ? o.material : [o.material])
-        .forEach(m => m?.dispose());
-    });
   }
 }
