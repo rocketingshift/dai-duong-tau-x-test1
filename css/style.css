@@ -78,27 +78,22 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── Scroll container (2500vh tall) ─────────── */
-#scroll-container {
+/* ── Scroll container ── id="scroller" khớp HTML ── */
+#scroller {
   height: 2500vh;
   position: relative;
   pointer-events: none;
 }
 
-/* ── Fixed canvas wrapper ───────────────────── */
-#canvas-wrapper {
+/* ── Fixed WebGL canvas (full-screen, không scroll theo page) ── */
+#webgl-canvas {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-}
-
-canvas {
-  display: block;
   width: 100% !important;
   height: 100% !important;
+  z-index: 0;
+  display: block;
 }
 
 /* ══════════════════════════════════════════════
