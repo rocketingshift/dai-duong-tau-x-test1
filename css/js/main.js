@@ -242,4 +242,4 @@ requestAnimationFrame(loop);
 
 // ── Kick off loading ────────────────────────────────────────
 setProgress(0);
-ASET_LIST.forEach(loadAsset);
+ASSET_LIST → Commit.forEach(loadAsset);
