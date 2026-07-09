@@ -1,356 +1,256 @@
-/* =============================================
-   OCEANX — style.css
-   Fonts via jsDelivr CDN (CORS OK)
-   ============================================= */
+/* ══════════════════════════════════════════════════════════
+   style.css — Đại Dương X — v3
+   Root-fix: z-index stacking — canvas dưới đáy (z:0),
+   UI overlays luôn nằm trên (z:10–50)
+   ══════════════════════════════════════════════════════════ */
 
-/* ── @font-face ─────────────────────────────── */
+/* ── Reset ────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: auto; }
+
+body {
+  background: #000d15;
+  color: #fff;
+  font-family: 'DM Mono', monospace;
+  overflow-x: hidden;
+  /* overflow-y: auto — KHÔNG lock ở đây, main.js tự quản lý */
+}
+
+/* ── Fonts ────────────────────────────────────────────────── */
 @font-face {
   font-family: 'DM Mono';
   src: url('https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x2@main/DMMono-Medium.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 500; font-display: swap;
 }
-
 @font-face {
   font-family: 'ZeistN2';
   src: url('https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x2@main/ZeistN2Web-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 400; font-display: swap;
 }
-
 @font-face {
   font-family: 'ZeistN2';
   src: url('https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x2@main/ZeistN2Web-Medium.woff2') format('woff2');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 500; font-display: swap;
 }
-
 @font-face {
   font-family: 'ZeistN2';
   src: url('https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x2@main/ZeistN2Web-SemiBold.woff2') format('woff2');
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 600; font-display: swap;
 }
-
 @font-face {
   font-family: 'ZeistT1';
   src: url('https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x2@main/ZeistT1Web-Medium.woff2') format('woff2');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
+  font-weight: 500; font-display: swap;
 }
 
-/* ── Reset ──────────────────────────────────── */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* ══════════════════════════════════════════════════════════
+   Z-INDEX LAYER MAP
+     0  → #webgl-canvas      (Three.js, luôn ở đáy)
+     1  → #scroller           (scroll container phantom)
+    10  → header, indicators, ui elements
+    50  → #preloader, #introduction  (full-screen overlays)
+   ══════════════════════════════════════════════════════════ */
 
-/* ── Design Tokens ──────────────────────────── */
-:root {
-  --color-bg:      #000d15;
-  --color-cyan:    #90e0ef;
-  --color-orange:  #ff7438;
-  --color-scene:   #07192d;
-  --color-water-a: #193653;
-  --color-water-b: #021436;
-  --font-mono:     'DM Mono', 'Courier New', monospace;
-  --font-serif:    'ZeistN2', Georgia, serif;
-  --font-title:    'ZeistT1', Georgia, serif;
-}
-
-/* ── Base ───────────────────────────────────── */
-html {
-  scroll-behavior: auto;
-}
-
-html, body {
-  width: 100%;
-  background: var(--color-bg);
-  color: #ffffff;
-  font-family: var(--font-mono);
-  overflow-x: hidden;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* ── Scroll container ── id="scroller" khớp HTML ── */
-#scroller {
-  height: 2500vh;
-  position: relative;
-  pointer-events: none;
-}
-
-/* ── Fixed WebGL canvas (full-screen, không scroll theo page) ── */
+/* ── WebGL Canvas — LUÔN ở đáy ───────────────────────────── */
 #webgl-canvas {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100% !important;
-  height: 100% !important;
-  z-index: 0;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  z-index: 0;          /* ← đáy cùng */
   display: block;
+  outline: none;
 }
 
-/* ══════════════════════════════════════════════
-   PRELOADER
-══════════════════════════════════════════════ */
+/* ── Scroller — phantom height, không block click ────────── */
+#scroller {
+  height: 2500vh;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════
+   FULL-SCREEN OVERLAYS (z: 50)
+   Phải có position: fixed để nằm TRÊN canvas!
+   ══════════════════════════════════════════════════════════ */
+
+/* ── Preloader ────────────────────────────────────────────── */
 #preloader {
-  position: fixed;
+  position: fixed;     /* ← PHẢI fixed */
   inset: 0;
-  z-index: 100;
-  background: var(--color-bg);
-  display: flex;
+  z-index: 50;
+  display: flex;       /* showUI() xóa inline display:none → fallback về flex này */
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 40px;
-  transition: opacity 0.8s ease;
-}
-
-#preloader.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.preloader-logo {
-  font-family: var(--font-title);
-  font-weight: 500;
-  font-size: clamp(36px, 7vw, 80px);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: #ffffff;
-}
-
-.preloader-bar-wrap {
-  width: clamp(200px, 28vw, 340px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.preloader-bar {
-  width: 100%;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.12);
-  position: relative;
-  overflow: hidden;
-}
-
-.preloader-bar-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 0%;
-  background: var(--color-cyan);
-  transition: width 0.4s ease;
-}
-
-.preloader-pct {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  gap: 1rem;
+  background: #000d15;
+  color: #90e0ef;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.8rem;
   letter-spacing: 0.15em;
-  color: var(--color-cyan);
   text-transform: uppercase;
 }
 
-/* ══════════════════════════════════════════════
-   INTRODUCTION / ENTRY
-══════════════════════════════════════════════ */
+/* ── Introduction (intro screen) ─────────────────────────── */
 #introduction {
-  position: fixed;
+  position: fixed;     /* ← PHẢI fixed — đây là root cause của bug */
   inset: 0;
-  z-index: 90;
-  display: flex;
+  z-index: 50;
+  display: flex;       /* showUI() xóa inline style="display:none" → fallback flex */
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
-  padding-bottom: 8vh;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.8s ease;
-}
-
-#introduction.visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-#introduction.out {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.6s ease;
-}
-
-.intro-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 28px;
+  justify-content: center;
+  padding: 2rem;
   text-align: center;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 13, 21, 0.6) 0%,
+    rgba(0, 13, 21, 0.15) 50%,
+    rgba(0, 13, 21, 0.6) 100%
+  );
 }
 
-.intro-subtitle {
-  font-family: var(--font-mono);
-  font-size: clamp(10px, 1.2vw, 13px);
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.45);
-}
-
-.intro-enter-btn {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
+/* Tiêu đề trong intro */
+#introduction h1,
+#introduction .title {
+  font-family: 'ZeistN2', serif;
+  font-size: clamp(2rem, 5vw, 4.5rem);
+  font-weight: 600;
   color: #ffffff;
+  line-height: 1.05;
+  margin-bottom: 1rem;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+}
+
+/* Mô tả ngắn */
+#introduction p,
+#introduction .subtitle {
+  font-family: 'DM Mono', monospace;
+  font-size: clamp(0.72rem, 1.4vw, 0.88rem);
+  color: #90e0ef;
+  max-width: 460px;
+  line-height: 1.85;
+  letter-spacing: 0.05em;
+  margin-bottom: 2.5rem;
+}
+
+/* Enter button */
+#introduction button,
+#introduction .enter-btn,
+.enter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 2.5rem;
+  border: 1.5px solid #ff7438;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  padding: 16px 48px;
+  color: #ff7438;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   cursor: pointer;
+  transition: background 0.22s ease, color 0.22s ease;
   outline: none;
-  transition: border-color 0.3s ease, color 0.3s ease;
   pointer-events: auto;
 }
-
-.intro-enter-btn:hover {
-  border-color: var(--color-orange);
-  color: var(--color-orange);
+#introduction button:hover,
+#introduction .enter-btn:hover,
+.enter-btn:hover {
+  background: #ff7438;
+  color: #000d15;
 }
 
-/* ══════════════════════════════════════════════
-   SCROLL INDICATOR
-══════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════
+   UI ELEMENTS (z: 10) — header, indicators, misc
+   ══════════════════════════════════════════════════════════ */
+
+/* ── Site Header ──────────────────────────────────────────── */
+#site-header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;         /* showUI() sẽ clear display:none → flex */
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2rem 2rem;
+  background: linear-gradient(to bottom, rgba(0,13,21,0.5), transparent);
+  pointer-events: none;
+}
+#site-header * { pointer-events: auto; }
+
+/* ── Scroll Indicator ─────────────────────────────────────── */
 #scroll-indicator {
   position: fixed;
-  bottom: 36px;
+  bottom: 2.5rem;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 80;
-  display: flex;
+  z-index: 10;
+  display: flex;          /* showUI() → flex */
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.6s ease;
-}
-
-#scroll-indicator.visible {
-  opacity: 1;
-  animation: indicatorBounce 2.2s ease-in-out infinite;
-}
-
-#scroll-indicator.hidden {
-  opacity: 0;
-  transition: opacity 0.4s ease;
-}
-
-@keyframes indicatorBounce {
-  0%, 100% { transform: translateX(-50%) translateY(0px); }
-  50%       { transform: translateX(-50%) translateY(10px); }
-}
-
-.scroll-indicator-line {
-  width: 1px;
-  height: 44px;
-  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.55));
-}
-
-.scroll-indicator-text {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.22em;
+  gap: 0.4rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-}
-
-/* ══════════════════════════════════════════════
-   ENDING
-══════════════════════════════════════════════ */
-#ending {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  background: var(--color-bg);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 36px;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 1.2s ease;
+  animation: indicatorFloat 2.4s ease-in-out infinite;
+}
+#scroll-indicator::after {
+  content: '';
+  width: 1px;
+  height: 36px;
+  background: linear-gradient(to bottom, rgba(144, 224, 239, 0.7), transparent);
+}
+@keyframes indicatorFloat {
+  0%, 100% { opacity: 0.45; transform: translateX(-50%) translateY(0);   }
+  50%       { opacity: 1.00; transform: translateX(-50%) translateY(6px); }
 }
 
-#ending.visible {
-  opacity: 1;
+/* ── UI Bottom ────────────────────────────────────────────── */
+#ui-bottom {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 0; right: 0;
+  z-index: 10;
+  display: flex;          /* showUI() → flex */
+  justify-content: center;
+  gap: 1rem;
   pointer-events: auto;
 }
 
-.ending-title {
-  font-family: var(--font-title);
-  font-weight: 500;
-  font-size: clamp(24px, 4.5vw, 56px);
-  letter-spacing: 0.12em;
-  text-align: center;
-  color: #ffffff;
-  line-height: 1.3;
+/* ── Share UI ─────────────────────────────────────────────── */
+#ui-share {
+  position: fixed;
+  top: 1.5rem; right: 2rem;
+  z-index: 10;
+  display: flex;          /* showUI() → flex */
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: auto;
 }
 
-.ending-desc {
-  font-family: var(--font-mono);
-  font-size: clamp(11px, 1.3vw, 14px);
-  letter-spacing: 0.1em;
-  color: rgba(255, 255, 255, 0.5);
-  text-align: center;
-  max-width: 480px;
-  line-height: 1.8;
+/* ── Partners ─────────────────────────────────────────────── */
+#partners {
+  position: fixed;
+  bottom: 4.5rem;
+  left: 0; right: 0;
+  z-index: 10;
+  display: flex;          /* showUI() → flex */
+  justify-content: center;
+  align-items: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+  padding: 0 2rem;
+  pointer-events: none;
 }
 
-.ending-share-btn {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-  color: #ffffff;
-  background: var(--color-orange);
-  border: none;
-  padding: 18px 52px;
-  cursor: pointer;
-  outline: none;
-  transition: opacity 0.3s ease, transform 0.2s ease;
-}
-
-.ending-share-btn:hover {
-  opacity: 0.88;
-  transform: scale(1.02);
-}
-
-/* ══════════════════════════════════════════════
-   RESPONSIVE
-══════════════════════════════════════════════ */
-@media (max-width: 1024px) {
-  .intro-enter-btn {
-    padding: 14px 36px;
-    font-size: 11px;
-  }
-
-  .ending-share-btn {
-    padding: 16px 40px;
-  }
-}
-
-@media (max-width: 640px) {
-  .preloader-logo {
-    letter-spacing: 0.2em;
-  }
-}
+/* ── Globals ──────────────────────────────────────────────── */
+button    { cursor: pointer; border: none; background: none; font: inherit; }
+a         { color: inherit; text-decoration: none; }
+img, svg  { display: block; max-width: 100%; }
