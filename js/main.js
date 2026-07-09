@@ -83,7 +83,7 @@ function createRenderer() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping         = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 1.6;
   renderer.outputColorSpace    = THREE.SRGBColorSpace;
 }
 
@@ -290,3 +290,5 @@ async function main() {
 }
 
 main().catch(err => console.error('[main] fatal boot error:', err));
+
+
