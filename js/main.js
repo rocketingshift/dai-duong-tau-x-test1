@@ -33,7 +33,6 @@ const elIntroduction = document.getElementById('introduction');
 const elScroller     = document.getElementById('scroller');
 const elHeader       = document.getElementById('site-header');
 const elScrollInd    = document.getElementById('scroll-indicator');
-const elUiBottom     = document.getElementById('ui-bottom');
 
 /* ─── Scene transition overlay (created in JS) ───────────── */
 const overlay = document.createElement('div');
@@ -67,9 +66,10 @@ window.addEventListener('touchmove', e => {
 }, { passive: true });
 
 /* ─── Scene config ───────────────────────────────────────── */
-const GLOBE_END   = 0.28; // Globe scene active: 0 → 28%
-const TRANS_WIDTH = 0.04; // Crossfade zone:    28% → 32%
-const TIMELINE_START = GLOBE_END + TRANS_WIDTH; // 32% → 100%
+// TEST VALUES — đổi lại GLOBE_END=0.28, TRANS_WIDTH=0.04 sau khi có chapter markers
+const GLOBE_END      = 0.05; // Globe zone: 0% → 5% scroll (~125vh)
+const TRANS_WIDTH    = 0.01; // Crossfade:  5% → 6% scroll
+const TIMELINE_START = GLOBE_END + TRANS_WIDTH; // Timeline: 6% → 100%
 
 let phase       = 'preload';
 let activeScene = 'globe'; // 'globe' | 'transition' | 'timeline'
@@ -191,7 +191,7 @@ const clock = new THREE.Clock();
     globeScene.render();
 
   } else if (scrollFrac < TIMELINE_START) {
-    // Transition zone (short crossfade triggered once)
+    // Transition zone (crossfade triggered once)
     if (activeScene === 'globe' && !transitioning) switchToTimeline();
 
     // While transitioning, keep rendering globe
