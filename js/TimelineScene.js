@@ -1,25 +1,17 @@
-// js/TimelineScene.js — v6
-// v6 LIGHTING FIX:
-//   - toneMappingExposure phải set 1.6 trong main.js (không phải ở đây)
-//   - Sun: 0xb8d4f5×2.3 → 0xffeedd×3.5  (ấm hơn, sáng hơn)
-//   - Ambient: 0x334466×0.9 → 0x7aadc8×1.6  (+6× fill sáng hơn)
-//   - Rim: ×0.45 → ×0.9  (mạnh hơn 2×)
-//   - Fill light MỚI: 0x4488bb×0.75 từ phía trước
-//   - Water base: 0x021436 → 0x0b3560  (visible dark navy)
-//   - Sky/fog: 0x0a1e30 → 0x142d45  (+50% sáng hơn)
-//   - Hull main: 0x060e1c → 0x1a3652  (+4× sáng hơn)
-//   - Hull mid:  0x0c1e38 → 0x2c4f72  (+3× sáng hơn)
-// v5 features kept:
-//   - Reliable water: custom ShaderMaterial (no Water.js)
-//   - Ship: auto-scale 5 units, submerged 20%
-//   - Bow wake: V-shape foam mesh, speed-reactive opacity
-//   - 4 seagulls orbiting ship
-//   - Camera: y=6, z=14 — cinematic side view
+// js/TimelineScene.js — v7
+// v7 vs v6:
+//   - _buildClouds() → clouds.glb từ R4 (xóa R1 sprite code hoàn toàn)
+//   - Sky/fog:    0x142d45 → 0x1a3650  (+25% brighter, vẫn dark mood)
+//   - Water base: 0x0b3560 → 0x1a5080  (+50% brighter, visible ocean)
+//   - Ambient:    ×1.6 → ×2.0  (+25% fill light)
+//   - Sun:        ×3.5 → ×4.2  (+20% key light)
+//   - Fog density:0.005 → 0.004 (ít haze hơn)
+//   - Ship scale: 5.0 → 7.0   (40% larger in frame)
+//   - Camera:     (0,6,14) → (0,3,12) — horizon-level cinematic view
+//   - lookAt:     (0,1,0) → (0,2,0)  — look at horizon, not ground
 
 import * as THREE from 'three';
 
-// Module-level constants (original — kept for _buildClouds fallback)
-const R1 = 'https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x-1@main/';
 const R4 = 'https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x4@main/';
 
 // ── Water vertex shader ────────────────────────────────────────────────────
@@ -40,8 +32,8 @@ const WATER_VERT = /* glsl */`
 const WATER_FRAG = /* glsl */`
   precision highp float;
   uniform float     uTime;
-  uniform vec3      uWaterColor;   // v6: 0x0b3560 (visible dark navy)
-  uniform vec3      uFogColor;     // v6: 0x142d45 (matches sky)
+  uniform vec3      uWaterColor;   // v7: 0x1a5080 (visible blue)
+  uniform vec3      uFogColor;     // v7: 0x1a3650 (matches sky)
   uniform float     uFogDensity;
   uniform vec3      uCamPos;
   uniform sampler2D uNormals;
@@ -50,7 +42,6 @@ const WATER_FRAG = /* glsl */`
   varying vec3  vWorldPos;
 
   void main() {
-    // Procedural animated normals (2 overlapping wave sets)
     vec2 uv1 = vUv * 6.0  + vec2( uTime * 0.018, uTime * 0.012);
     vec2 uv2 = vUv * 11.0 + vec2(-uTime * 0.013, uTime * 0.021);
     float h1 = sin(uv1.x * 6.283) * cos(uv1.y * 6.283);
@@ -65,21 +56,18 @@ const WATER_FRAG = /* glsl */`
       nn = normalize(vec3(h1 * 0.25, 1.0, h2 * 0.25));
     }
 
-    // Fresnel
     vec3  viewDir = normalize(uCamPos - vWorldPos);
     float vDotN   = max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0);
     float fresnel = pow(1.0 - vDotN, 3.5) * 0.65;
 
-    // Specular (sun at 5,8,5)
     vec3  sunDir = normalize(vec3(5.0, 8.0, 5.0));
     vec3  halfV  = normalize(sunDir + viewDir);
     float spec   = pow(max(dot(nn, halfV), 0.0), 128.0);
 
     vec3 color = uWaterColor;
-    color = mix(color, vec3(0.05, 0.18, 0.38), fresnel * 0.55);
-    color += vec3(0.65, 0.75, 0.85) * spec * 0.55;
+    color = mix(color, vec3(0.05, 0.22, 0.44), fresnel * 0.55);
+    color += vec3(0.70, 0.80, 0.90) * spec * 0.60;
 
-    // Fog
     float dist      = length(vWorldPos - uCamPos);
     float fogFactor = 1.0 - exp(-uFogDensity * dist);
     color = mix(color, uFogColor, clamp(fogFactor, 0.0, 0.85));
@@ -95,19 +83,21 @@ export class TimelineScene {
 
     // ── Scene ──────────────────────────────────────────────────────────────
     this.scene = new THREE.Scene();
-    // v6: sky brightened 0x0a1e30 → 0x142d45
-    this.scene.background = new THREE.Color(0x142d45);
-    this.scene.fog = new THREE.FogExp2(0x142d45, 0.005);
+    // v7: sky brightened 0x142d45 → 0x1a3650
+    this.scene.background = new THREE.Color(0x1a3650);
+    // v7: fog density reduced 0.005 → 0.004
+    this.scene.fog = new THREE.FogExp2(0x1a3650, 0.004);
 
-    // ── Camera — cinematic low-angle side view ──────────────────────────────
+    // ── Camera — v7: horizon-level cinematic (was y=6,z=14 elevated/top-down) ──
     this.camera = new THREE.PerspectiveCamera(
       45,
       window.innerWidth / window.innerHeight,
       0.1,
       800
     );
-    this.camera.position.set(0, 6, 14);
-    this.camera.lookAt(0, 1, 0);
+    // v7: y=3, z=12 → ship fills more of frame + horizon-level drama
+    this.camera.position.set(0, 3, 12);
+    this.camera.lookAt(0, 2, 0);
 
     // ── Scroll state ────────────────────────────────────────────────────────
     this._delta      = 0;
@@ -130,28 +120,28 @@ export class TimelineScene {
     this.clouds        = [];
     this.mixers        = [];
     this._ready        = false;
-    this._time         = 0;   // internal elapsed time (seconds)
+    this._time         = 0;
   }
 
   // ────────────────────────────────────────────────────────────────────────────
   async init({ gltfLoader, ktx2Loader, R1: r1, R4: r4, onProgress }) {
     const scene = this.scene;
 
-    // ── Lights (v6 FIX) ──────────────────────────────────────────────────────
-    // Sun — warmer + significantly brighter (was 0xb8d4f5 × 2.3)
-    const sun = new THREE.DirectionalLight(0xffeedd, 3.5);
+    // ── Lights (v7: brighter ambient + sun) ───────────────────────────────────
+    // Sun — v7: ×4.2 (was ×3.5)
+    const sun = new THREE.DirectionalLight(0xffeedd, 4.2);
     sun.position.set(5, 8, 5);
     scene.add(sun);
 
-    // Ambient fill — bright blue (was 0x334466×0.9 = very dark)
-    scene.add(new THREE.AmbientLight(0x7aadc8, 1.6));
+    // Ambient — v7: ×2.0 (was ×1.6)
+    scene.add(new THREE.AmbientLight(0x7aadc8, 2.0));
 
-    // Cyan rim — brand accent, doubled intensity (was 0.45)
+    // Cyan rim
     const rim = new THREE.DirectionalLight(0x90e0ef, 0.9);
     rim.position.set(-5, 2, -8);
     scene.add(rim);
 
-    // Fill light — front-left (NEW: eliminates pitch-black shadow side)
+    // Fill light — front-left
     const fill = new THREE.DirectionalLight(0x4488bb, 0.75);
     fill.position.set(-10, 4, 12);
     scene.add(fill);
@@ -176,11 +166,11 @@ export class TimelineScene {
       gltfLoader.load(r4 + 'ship.glb', gltf => {
         const model = gltf.scene;
 
-        // Auto-scale → longest dimension = 5.0 world units
+        // v7: scale target 7.0 (was 5.0) — ship 40% larger in frame
         const box  = new THREE.Box3().setFromObject(model);
         const size = new THREE.Vector3();
         box.getSize(size);
-        const sf = 5.0 / Math.max(size.x, size.y, size.z, 0.001);
+        const sf = 7.0 / Math.max(size.x, size.y, size.z, 0.001);
         model.scale.setScalar(sf);
 
         // Submerge 20%
@@ -206,7 +196,6 @@ export class TimelineScene {
         const tmpl  = gltf.scene;
         const anims = gltf.animations || [];
 
-        // White fallback material
         tmpl.traverse(m => {
           if (!m.isMesh) return;
           m.material = new THREE.MeshStandardMaterial({
@@ -217,20 +206,15 @@ export class TimelineScene {
           });
         });
 
-        // KTX2 diffuse texture
         if (ktx2Loader) {
           ktx2Loader.load(r4 + 'seagull_diffuse.ktx2', tex => {
             tex.colorSpace = THREE.SRGBColorSpace;
             tmpl.traverse(m => {
-              if (m.isMesh) {
-                m.material.map = tex;
-                m.material.needsUpdate = true;
-              }
+              if (m.isMesh) { m.material.map = tex; m.material.needsUpdate = true; }
             });
           });
         }
 
-        // Auto-scale → wingspan 0.45 units
         const sgBox = new THREE.Box3().setFromObject(tmpl);
         const sgSz  = new THREE.Vector3();
         sgBox.getSize(sgSz);
@@ -278,10 +262,7 @@ export class TimelineScene {
           ktx2Loader.load(r4 + 'bouy_diffuse.ktx2', tex => {
             tex.colorSpace = THREE.SRGBColorSpace;
             buoy.traverse(m => {
-              if (m.isMesh && m.material) {
-                m.material.map = tex;
-                m.material.needsUpdate = true;
-              }
+              if (m.isMesh && m.material) { m.material.map = tex; m.material.needsUpdate = true; }
             });
           });
         }
@@ -293,34 +274,33 @@ export class TimelineScene {
       }, undefined, err => { console.warn('[TS] buoy:', err); resolve(); });
     });
 
-    // ── Clouds ───────────────────────────────────────────────────────────────
-    this._buildClouds(scene);
+    // ── Clouds — v7: clouds.glb from R4 ──────────────────────────────────────
+    this._buildClouds(scene, gltfLoader, r4);
 
     this._ready = true;
-    console.log('[TS] TimelineScene v6 ready ✓');
+    console.log('[TS] TimelineScene v7 ready ✓');
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // Water plane — custom ShaderMaterial (no Water.js dependency)
+  // Water plane — custom ShaderMaterial
   // ────────────────────────────────────────────────────────────────────────────
   _buildWater(scene) {
-    // v6 FIX: 0x021436 (near-black) → 0x0b3560 (visible dark navy)
-    const wCol   = new THREE.Color(0x0b3560);
-    // v6 FIX: fog matches new sky color
-    const fogCol = new THREE.Color(0x142d45);
+    // v7: water base brighter 0x0b3560 → 0x1a5080
+    const wCol   = new THREE.Color(0x1a5080);
+    // v7: fog matches new sky 0x1a3650
+    const fogCol = new THREE.Color(0x1a3650);
 
     const uniforms = {
       uTime      : { value: 0 },
       uWaterColor: { value: wCol },
       uFogColor  : { value: fogCol },
-      uFogDensity: { value: 0.005 },   // v6: slightly less (was 0.006)
+      uFogDensity: { value: 0.004 },  // v7: 0.005 → 0.004
       uCamPos    : { value: this.camera.position },
       uNormals   : { value: null },
       uHasNormals: { value: 0 },
     };
     this.waterUniforms = uniforms;
 
-    // Try loading water normals from Three.js CDN
     new THREE.TextureLoader().load(
       'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r175/examples/textures/waternormals.jpg',
       tex => {
@@ -346,7 +326,7 @@ export class TimelineScene {
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // V-shape bow wake (attached as child of ship)
+  // V-shape bow wake
   // ────────────────────────────────────────────────────────────────────────────
   _buildBowWake(shipModel, shipLength) {
     const hw = shipLength * 0.40;
@@ -381,38 +361,55 @@ export class TimelineScene {
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // Cloud sprites (R1 cloud0/3/6.webp — 404 silently if x1 is dead)
+  // v7: clouds.glb từ r4 — 5 instances drifting in sky
+  // Replaces R1 sprite approach (R1=404, no clouds in v5/v6)
   // ────────────────────────────────────────────────────────────────────────────
-  _buildClouds(scene) {
-    const loader = new THREE.TextureLoader();
-    // [file, x, y, z, scale, drift-speed]
-    [
-      ['cloud0.webp', -25, 16, -22, 14, 0.012 ],
-      ['cloud3.webp',  10, 20, -32, 18, 0.008 ],
-      ['cloud6.webp',  35, 14, -18, 11, 0.016 ],
-    ].forEach(([file, cx, cy, cz, scale, spd]) => {
-      loader.load(R1 + file, tex => {
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          map        : tex,
+  _buildClouds(scene, gltfLoader, r4) {
+    gltfLoader.load(r4 + 'clouds.glb', gltf => {
+      const tmpl = gltf.scene;
+
+      // Atmospheric cloud material
+      tmpl.traverse(m => {
+        if (!m.isMesh) return;
+        m.material = new THREE.MeshStandardMaterial({
+          color      : 0xddeeff,
           transparent: true,
           opacity    : 0.40,
           depthWrite : false,
-          fog        : true,
-        }));
-        sprite.scale.setScalar(scale);
-        sprite.position.set(cx, cy, cz);
-        sprite.userData.spd    = spd;
-        sprite.userData.limitX = 70;
-        this.clouds.push(sprite);
-        scene.add(sprite);
+          roughness  : 1.0,
+          metalness  : 0.0,
+        });
       });
-      // 404 from dead x1 → TextureLoader swallows it silently — no crash
-    });
+
+      // Scale template → longest dimension = 6 world units
+      const bbox = new THREE.Box3().setFromObject(tmpl);
+      const dims = new THREE.Vector3();
+      bbox.getSize(dims);
+      const baseSf = 6.0 / Math.max(dims.x, dims.y, dims.z, 0.001);
+
+      // [x, y, z, scale_mult, drift_speed]
+      [
+        [ -25, 16, -22, 1.8, 0.012 ],
+        [  10, 20, -32, 2.4, 0.008 ],
+        [  35, 14, -18, 1.4, 0.016 ],
+        [ -10, 18, -28, 2.0, 0.010 ],
+        [  22, 22, -15, 1.6, 0.009 ],
+      ].forEach(([cx, cy, cz, sv, spd]) => {
+        const c = tmpl.clone(true);
+        c.scale.setScalar(baseSf * sv);
+        c.position.set(cx, cy, cz);
+        c.userData.spd    = spd;
+        c.userData.limitX = 70;
+        this.clouds.push(c);
+        scene.add(c);
+      });
+
+      console.log('[TS] 5 cloud instances (GLB) ✓');
+    }, undefined, e => console.warn('[TS] clouds.glb failed silently:', e));
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // Ship PBR materials — vertical zone based
-  // v6 FIX: hull brightened (0x060e1c near-black → 0x1a3652 visible navy)
+  // Ship PBR materials — vertical zone based (v6 values kept)
   // ────────────────────────────────────────────────────────────────────────────
   _applyShipMaterials(model) {
     const box    = new THREE.Box3().setFromObject(model);
@@ -423,7 +420,6 @@ export class TimelineScene {
       if (!mesh.isMesh) return;
       const name = (mesh.name || '').toLowerCase();
 
-      // ── Name overrides (priority) ─────────────────────────
       if (name.includes('glass') || name.includes('window')) {
         mesh.material = new THREE.MeshPhysicalMaterial({
           color: 0x5bbfdd, roughness: 0.0, metalness: 0.1,
@@ -445,7 +441,6 @@ export class TimelineScene {
         return;
       }
 
-      // ── Vertical zone ────────────────────────────────────
       const mBox = new THREE.Box3().setFromObject(mesh);
       const midY = (mBox.min.y + mBox.max.y) * 0.5;
       const relY = totalH > 0 ? (midY - minY) / totalH : 0.5;
@@ -453,16 +448,12 @@ export class TimelineScene {
       let color, roughness = 0.70, metalness = 0.20;
 
       if      (relY < 0.10) {
-        // Keel: antifoul red — visible (was 0x5c1a10 = very dark)
         color = 0x7a2818; roughness = 0.88; metalness = 0.06;
       } else if (relY < 0.42) {
-        // Main hull: dark navy — visible (was 0x060e1c = near-black)
         color = 0x1a3652; roughness = 0.70; metalness = 0.22;
       } else if (relY < 0.65) {
-        // Mid body: medium navy (was 0x0c1e38)
         color = 0x2c4f72; roughness = 0.65; metalness = 0.20;
       } else {
-        // Superstructure: bright off-white (was 0xdde8ee)
         color = 0xeef4f8; roughness = 0.48; metalness = 0.06;
       }
 
@@ -470,23 +461,21 @@ export class TimelineScene {
       mesh.castShadow    = false;
       mesh.receiveShadow = false;
     });
-  }
-
-  // ────────────────────────────────────────────────────────────────────────────
+  }// ────────────────────────────────────────────────────────────────────────────
   addScrollDelta(rawDelta, isTouch) {
     const speed = isTouch ? 0.8 : 0.5;
     this._delta = Math.max(-1.3, Math.min(1.3, rawDelta * speed));
     this._absScroll = Math.max(0, Math.min(100,
       this._absScroll + this._delta * 0.8
     ));
-  }  // ────────────────────────────────────────────────────────────────────────────
-  // Main per-frame update
-  // dt = delta time in seconds (capped at 0.05 by main.js)
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Main per-frame update — v7: camera y=3,z=12 lookAt(2) instead of y=6,z=14,lookAt(1)
   // ────────────────────────────────────────────────────────────────────────────
   update(dt) {
     if (!this._ready) return;
 
-    // ── Advance internal time ─────────────────────────────────────────────────────
     this._time += dt;
     const t = this._time;
 
@@ -495,47 +484,42 @@ export class TimelineScene {
       this.waterUniforms.uTime.value = t;
     }
 
-    // ── Scroll smoothing (3-pass, frame-rate-independent lerp) ───────────────
-    // k = 1 − e^(-rate*dt) — approaches 1 as dt→∞, 0 as dt→0
-    const k1 = 1 - Math.exp(-3.5 * dt);   // smoothAbs     (~fast)
-    const k2 = 1 - Math.exp(-1.8 * dt);   // smootherAbs   (~slow)
-    const k3 = 1 - Math.exp(-5.0 * dt);   // smoothDelta   (~very fast)
+    // ── Scroll smoothing (frame-rate-independent) ───────────────────────────
+    const k1 = 1 - Math.exp(-3.5 * dt);
+    const k2 = 1 - Math.exp(-1.8 * dt);
+    const k3 = 1 - Math.exp(-5.0 * dt);
 
     this.smoothAbs   += (this._absScroll - this.smoothAbs)   * k1;
     this.smootherAbs += (this.smoothAbs  - this.smootherAbs) * k2;
     this.smoothDelta += (this._delta     - this.smoothDelta)  * k3;
 
-    // Decay raw _delta toward 0 each frame
-    this._delta *= Math.pow(0.05, dt);   // 0.05^(1/60) ≈ 0.953/frame @60fps
+    // Decay raw delta → 0 each frame
+    this._delta *= Math.pow(0.05, dt);
 
-    // ── Camera targets driven by virtual scroll ───────────────────────────
-    // smootherAbs: 0→0=scroll back, 50=center, 100=scroll forward
-    const frac = (this.smootherAbs - 50) / 50;  // −10 → 0 → +1
+    // ── Camera targets ───────────────────────────────────────────────────────
+    const frac = (this.smootherAbs - 50) / 50;  // -1→0→+1
 
-    // Pan camera left→right as user scrolls through timeline
     const targetCamX  =  frac * 5.5;
     const targetLookX =  frac * 2.0;
-    // Slight vertical drift with scroll
     const targetCamY  =  frac * 0.5;
 
-    const kCam = 1 - Math.exp(-1.2 * dt);  // camera lag
+    const kCam = 1 - Math.exp(-1.2 * dt);
     this.camX  += (targetCamX  - this.camX)  * kCam;
     this.camY  += (targetCamY  - this.camY)  * kCam;
     this.lookX += (targetLookX - this.lookX) * kCam;
 
     // ── Ship: bob + gentle roll ──────────────────────────────────────────────
     if (this.ship) {
-      // Cache base Y on first call (set during init after scale/submerge)
       if (this.ship.userData._baseY === undefined) {
         this.ship.userData._baseY = this.ship.position.y;
       }
       this.ship.position.y =
         this.ship.userData._baseY + Math.sin(t * 0.60) * 0.04;
-      this.ship.rotation.z = Math.sin(t * 0.38) * 0.007;  // roll
-      this.ship.rotation.x = Math.sin(t * 0.28 + 1.1) * 0.003;  // pitch
+      this.ship.rotation.z = Math.sin(t * 0.38) * 0.007;
+      this.ship.rotation.x = Math.sin(t * 0.28 + 1.1) * 0.003;
     }
 
-    // ── Seagulls: orbit around ship position ───────────────────────────
+    // ── Seagulls orbit around ship ──────────────────────────────────────────
     const shipX = this.ship?.position.x ?? 0;
     const shipZ = this.ship?.position.z ?? 0;
 
@@ -547,19 +531,17 @@ export class TimelineScene {
         ry + Math.sin(t * 0.55 + ph) * 0.30,
         shipZ + Math.sin(angle) * Math.abs(rz)
       );
-      // Face direction of travel
       bird.rotation.y = -angle + Math.PI * 0.5;
     });
 
-    // ── Animation mixers (seagull wing flaps) ───────────────────────────
+    // ── Animation mixers ─────────────────────────────────────────────────────
     this.mixers.forEach(mx => mx.update(dt));
 
-    // ── Cloud drift ────────────────────────────────────────────────────────────
-    // (no clouds in x1, these sprites 404 silently — array stays empty)
-    this.clouds.forEach(sprite => {
-      sprite.position.x += sprite.userData.spd;
-      if (sprite.position.x > sprite.userData.limitX) {
-        sprite.position.x = -sprite.userData.limitX;
+    // ── Cloud drift (GLB meshes same logic as sprites) ───────────────────────
+    this.clouds.forEach(c => {
+      c.position.x += c.userData.spd;
+      if (c.position.x > c.userData.limitX) {
+        c.position.x = -c.userData.limitX;
       }
     });
 
@@ -569,20 +551,18 @@ export class TimelineScene {
       this.buoy.rotation.z = Math.sin(t * 0.51 + 0.7) * 0.04;
     }
 
-    // ── Bow wake opacity (speed-reactive) ───────────────────────────────
-    const spd   = Math.abs(this.smoothDelta);
-    const wkOp  = Math.min(0.30, spd * 0.12 + 0.08);
+    // ── Wake opacity (speed-reactive) ────────────────────────────────────────
+    const wkOp = Math.min(0.30, Math.abs(this.smoothDelta) * 0.12 + 0.08);
     if (this.wakeL?.material) this.wakeL.material.opacity = wkOp;
     if (this.wakeR?.material) this.wakeR.material.opacity = wkOp;
 
-    // ── Apply camera ────────────────────────────────────────────────────────────
-    // Base: (0, 6, 14) + scroll pan X + subtle vertical bob
+    // ── Camera — v7: y=3, z=12, lookAt y=2 (horizon-level) ─────────────────
     this.camera.position.set(
       this.camX,
-      6 + this.camY + Math.sin(t * 0.17) * 0.10,
-      14
+      3 + this.camY + Math.sin(t * 0.17) * 0.10,   // was: 6 + ...
+      12                                              // was: 14
     );
-    this.camera.lookAt(this.lookX, 1, 0);
+    this.camera.lookAt(this.lookX, 2, 0);             // was: (lookX, 1, 0)
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -590,10 +570,9 @@ export class TimelineScene {
     this.renderer.render(this.scene, this.camera);
   }
 
-  // ────────────────────────────────────────────────────────────────────────────
   onResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
   }
 }
-// ── END TimelineScene v6 ───────────────────────────────────────────────────────────
+// ── END TimelineScene v7 ──────────────────────────────────────────────────────
