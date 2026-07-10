@@ -1,33 +1,38 @@
 // ============================================================
-// main.js  v5.3
-// Đại Dương X — Pure Three.js @0.169.0
-// Changes vs v5.2:
-//   per-scene toneMappingExposure
-//     Globe    → 1.6
-//     Timeline → 2.2
+// main.js  v5.4
+// Fix vs v5.3:
+//   - Import GLTFLoader + KTX2Loader
+//   - Tạo shared loaders sau renderer
+//   - GlobeScene(renderer)    → constructor đúng (bỏ R4/BASIS_PATH)
+//   - TimelineScene(renderer) → constructor đúng
+//   - globeScene.init({ gltfLoader, ktx2Loader, R1, R4, onProgress })
+//   - timelineScene.init({ gltfLoader, ktx2Loader, R1, R4, onProgress:null })
+//   - per-scene toneMappingExposure: Globe=1.6 / Timeline=2.2
 // ============================================================
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader }  from 'three/addons/loaders/KTX2Loader.js';
 import { GlobeScene }    from './GlobeScene.js';
 import { TimelineScene } from './TimelineScene.js';
 
-// ─── Asset CDN ──────────────────────────────────────────────────────────────
+// ─── Asset CDN ───────────────────────────────────────────────────────────────
 const R4         = 'https://cdn.jsdelivr.net/gh/rocketingshift/dai-duong-tau-x4@main/';
 const R1         = R4;   // x1 repo = 404 — dùng R4 cho tất cả assets
 const BASIS_PATH = 'https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/basis/';
 
-// ─── Config ─────────────────────────────────────────────────────────────────
-const GLOBE_END = 0.05;   // scroll fraction Globe→Timeline transition
+// ─── Config ──────────────────────────────────────────────────────────────────
+const GLOBE_END = 0.05;   // scroll fraction Globe→Timeline
                            // 0.05 = test mode | 0.28 = production
 
 // ─── App State ───────────────────────────────────────────────────────────────
 const S = {
-  entered:       false,   // user đã click "Enter"
-  timelineInit:  false,   // bootTimeline() đã được gọi
-  timelineReady: false,   // TimelineScene.init() resolved
-  tlVirtual:     0,       // virtual scroll progress (0–100) từ TimelineScene
-  endingFired:   false,   // fireEnding() đã chạy
-  lastT:         null,    // RAF timestamp trước (seconds)
+  entered:       false,
+  timelineInit:  false,
+  timelineReady: false,
+  tlVirtual:     0,       // 0–100, mirror của TimelineScene._absScroll
+  endingFired:   false,
+  lastT:         null,
 };
 
 // ─── DOM ─────────────────────────────────────────────────────────────────────
@@ -53,20 +58,27 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping         = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.6;     // default; per-scene override trong tick()
+renderer.toneMappingExposure = 1.6;     // default; override per-scene trong tick()
 renderer.outputColorSpace    = THREE.SRGBColorSpace;
+
+// ─── Shared Loaders (tạo 1 lần, dùng chung cho cả 2 scenes) ────────────────
+// KTX2Loader phải được tạo sau renderer (detectSupport cần WebGL context)
+const gltfLoader = new GLTFLoader();
+const ktx2Loader = new KTX2Loader();
+ktx2Loader.setTranscoderPath(BASIS_PATH);
+ktx2Loader.detectSupport(renderer);
 
 // ─── Scene Refs ───────────────────────────────────────────────────────────────
 /** @type {GlobeScene|null}    */ let globeScene    = null;
 /** @type {TimelineScene|null} */ let timelineScene = null;
 
-// ─── GTM helper ───────────────────────────────────────────────────────────────
+// ─── GTM helper ──────────────────────────────────────────────────────────────
 function gtm(event, params = {}) {
   window.dataLayer = window.dataLayer || [];
   window.dataLayer.push({ event, ...params });
 }
 
-// ─── Preloader ────────────────────────────────────────────────────────────────
+// ─── Preloader ───────────────────────────────────────────────────────────────
 function setProgress(pct) {
   const p = Math.round(Math.min(100, Math.max(0, pct)));
   if (preloaderFill) preloaderFill.style.width = p + '%';
@@ -96,7 +108,7 @@ function hideIntroduction() {
   setTimeout(() => { introduction.style.display = 'none'; }, 650);
 }
 
-// ─── Enter button ────────────────────────────────────────────────────────────
+// ─── Enter button ─────────────────────────────────────────────────────────────
 if (btnEnter) {
   btnEnter.addEventListener('click', () => {
     if (S.entered) return;
@@ -115,7 +127,7 @@ if (btnEnter) {
   });
 }
 
-// ─── Share button ────────────────────────────────────────────────────────────
+// ─── Share button ─────────────────────────────────────────────────────────────
 if (btnShare) {
   btnShare.addEventListener('click', () => {
     if (navigator.share) {
@@ -135,8 +147,10 @@ function bootTimeline() {
   if (S.timelineInit) return;
   S.timelineInit = true;
   console.log('[main] Booting TimelineScene…');
-  timelineScene = new TimelineScene(renderer, R4, BASIS_PATH);
-  timelineScene.init()
+
+  // Constructor chỉ nhận renderer — loaders truyền qua init()
+  timelineScene = new TimelineScene(renderer);
+  timelineScene.init({ gltfLoader, ktx2Loader, R1, R4, onProgress: null })
     .then(() => {
       S.timelineReady = true;
       console.log('[main] TimelineScene ready ✓');
@@ -146,7 +160,7 @@ function bootTimeline() {
     });
 }
 
-// ─── Ending ──────────────────────────────────────────────────────────────────
+// ─── Ending ───────────────────────────────────────────────────────────────────
 function fireEnding() {
   if (S.endingFired) return;
   S.endingFired = true;
@@ -169,17 +183,21 @@ function fireEnding() {
   gtm('ending_reached');
 }
 
-// ─── Globe boot ──────────────────────────────────────────────────────────────
+// ─── Globe boot ───────────────────────────────────────────────────────────────
 async function bootGlobe() {
   setProgress(5);
 
-  globeScene = new GlobeScene(renderer, R4, BASIS_PATH, (pct) => {
-    // pct 0–1 từ GlobeScene loader → map sang 5–95 trên preloader bar
-    setProgress(5 + pct * 90);
-  });
+  // Constructor chỉ nhận renderer — loaders + R4 truyền qua init()
+  globeScene = new GlobeScene(renderer);
 
   try {
-    await globeScene.init();
+    await globeScene.init({
+      gltfLoader,
+      ktx2Loader,
+      R1,
+      R4,
+      onProgress: (pct) => setProgress(5 + pct * 90),   // pct: 0→1 map sang 5→95
+    });
   } catch (err) {
     console.error('[main] GlobeScene init error:', err);
   }
@@ -191,19 +209,19 @@ async function bootGlobe() {
   showIntroduction();
 }
 
-// ─── Scroll — wheel ──────────────────────────────────────────────────────────
+// ─── Scroll — wheel ───────────────────────────────────────────────────────────
 window.addEventListener('wheel', (e) => {
   if (!S.entered) return;
-  const scrollMax   = document.body.scrollHeight - window.innerHeight;
-  const scrollFrac  = scrollMax > 0 ? window.scrollY / scrollMax : 0;
-  const inTL        = scrollFrac * 100 >= GLOBE_END * 100;
+  const scrollMax  = document.body.scrollHeight - window.innerHeight;
+  const scrollFrac = scrollMax > 0 ? window.scrollY / scrollMax : 0;
+  const inTL       = scrollFrac * 100 >= GLOBE_END * 100;
   if (inTL) {
     e.preventDefault();
     timelineScene?.addScrollDelta(e.deltaY, false);
   }
 }, { passive: false });
 
-// ─── Scroll — touch ──────────────────────────────────────────────────────────
+// ─── Scroll — touch ───────────────────────────────────────────────────────────
 let _touchStartY = 0;
 
 window.addEventListener('touchstart', (e) => {
@@ -223,7 +241,7 @@ window.addEventListener('touchmove', (e) => {
   }
 }, { passive: false });
 
-// ─── Resize ──────────────────────────────────────────────────────────────────
+// ─── Resize ───────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -231,14 +249,14 @@ window.addEventListener('resize', () => {
   timelineScene?.onResize();
 });
 
-// ─── RAF tick ────────────────────────────────────────────────────────────────
+// ─── RAF tick ─────────────────────────────────────────────────────────────────
 function tick(t) {
   requestAnimationFrame(tick);
 
-  const now = t * 0.001;                                   // ms → seconds
+  const now = t * 0.001;                                  // ms → seconds
   const dt  = S.lastT === null
     ? 0.016
-    : Math.min(now - S.lastT, 0.10);                       // cap tại 100ms
+    : Math.min(now - S.lastT, 0.10);                     // cap tại 100ms
   S.lastT = now;
 
   if (!S.entered || !globeScene) return;
@@ -249,13 +267,13 @@ function tick(t) {
   const inTL        = absProgress >= GLOBE_END * 100;
 
   if (!inTL) {
-    // ── Globe phase ──────────────────────────────────────────────────────────
+    // ── Globe phase ────────────────────────────────────────────────────────
     renderer.toneMappingExposure = 1.6;           // space / dark scene
     globeScene.update(dt, scrollFrac, 'scroll');
     globeScene.render();
 
   } else {
-    // ── Timeline phase ───────────────────────────────────────────────────────
+    // ── Timeline phase ─────────────────────────────────────────────────────
     if (!S.timelineInit) bootTimeline();
 
     if (S.timelineReady) {
@@ -263,19 +281,20 @@ function tick(t) {
       timelineScene.update(dt);
       timelineScene.render();
 
-      // Đọc virtual scroll progress từ TimelineScene (getter `progress` 0–100)
-      S.tlVirtual = timelineScene.progress ?? 0;
+      // Đọc virtual scroll progress từ TimelineScene
+      // TimelineScene expose qua getter progress (nếu có) hoặc _absScroll trực tiếp
+      S.tlVirtual = timelineScene.progress ?? timelineScene._absScroll ?? 0;
 
       if (!S.endingFired && S.tlVirtual >= 98) fireEnding();
 
     } else {
-      // Timeline vẫn đang load — giữ Globe làm backdrop
+      // Timeline vẫn đang load → giữ Globe làm backdrop
       renderer.toneMappingExposure = 1.6;
       globeScene.render();
     }
   }
 }
 
-// ─── Kick off ────────────────────────────────────────────────────────────────
+// ─── Kick off ─────────────────────────────────────────────────────────────────
 requestAnimationFrame(tick);
 bootGlobe();
