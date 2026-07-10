@@ -1,4 +1,5 @@
-// js/GlobeScene.js — v2 (textures + envmap + clouds)
+// js/GlobeScene.js — v3
+// v3 fix: _buildClouds() dùng clouds.glb từ R4 (cloud0-8.webp = 404 forever)
 import * as THREE from 'three';
 
 export class GlobeScene {
@@ -6,7 +7,7 @@ export class GlobeScene {
    * @param {THREE.WebGLRenderer} renderer  Shared renderer — NEVER reassigned.
    */
   constructor(renderer) {
-    this.renderer = renderer; // ← set ONCE, never touched again
+    this.renderer = renderer;
 
     /* ── Scene ───────────────────────────────────────────── */
     this.scene = new THREE.Scene();
@@ -100,7 +101,7 @@ export class GlobeScene {
       const envTex = await this._tex(tl, R4 + 'ocean-envmap.jpg');
       envTex.mapping = THREE.EquirectangularReflectionMapping;
 
-      const pmremGen = new THREE.PMREMGenerator(this.renderer); // local!
+      const pmremGen = new THREE.PMREMGenerator(this.renderer);
       pmremGen.compileEquirectangularShader();
       envMap = pmremGen.fromEquirectangular(envTex).texture;
       pmremGen.dispose();
@@ -131,13 +132,11 @@ export class GlobeScene {
 
     /* ── 4. Apply textures to earth model ──────────────── */
     if (earthGLTF) {
-      // Remove placeholder
       this.earthGroup.remove(this._placeholder);
       this._placeholder.geometry.dispose();
       this._placeholder.material.dispose();
       this._placeholder = null;
 
-      // Traverse earth GLB and apply textures to every mesh
       earthGLTF.scene.traverse(child => {
         if (!child.isMesh) return;
         const old = child.material;
@@ -158,7 +157,6 @@ export class GlobeScene {
       this.earthGroup.add(earthGLTF.scene);
 
     } else if (this._placeholder && envMap) {
-      // Fallback: enrich placeholder with envmap
       this._placeholder.material.envMap          = envMap;
       this._placeholder.material.envMapIntensity = 0.5;
       this._placeholder.material.roughness       = 0.55;
@@ -167,49 +165,70 @@ export class GlobeScene {
     }
     onProgress?.(0.84);
 
-    /* ── 5. Cloud sprites (cloud0–8.webp from R1) ──────── */
-    try {
-      await this._buildClouds(tl, R1);
-    } catch(e) {
-      console.warn('[GlobeScene] clouds failed:', e.message);
-    }
+    /* ── 5. Cloud GLB (v3: clouds.glb from R4, replaces dead cloud0-8.webp) */
+    await this._buildClouds(gltfLoader, R4);
 
     onProgress?.(1.0);
     this._ready = true;
     console.log('[GlobeScene] ready ✓ — renderer.render type:', typeof this.renderer.render);
   }
 
-  async _buildClouds(tl, R1) {
-    const textures = [];
-    for (let i = 0; i <= 8; i++) {
-      try {
-        textures.push(await this._tex(tl, `${R1}cloud${i}.webp`));
-      } catch { /* skip */ }
-    }
-    if (!textures.length) return;
-
-    const RADIUS = 1.13, COUNT = 45;
-    for (let i = 0; i < COUNT; i++) {
-      const tex = textures[i % textures.length];
-      const sp  = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, transparent: true, opacity: 0.65, depthWrite: false
-      }));
-
-      const phi   = Math.acos(2 * Math.random() - 1);
-      const theta = Math.random() * Math.PI * 2;
-      const r     = RADIUS + Math.random() * 0.04;
-      sp.position.set(
-        r * Math.sin(phi) * Math.cos(theta),
-        r * Math.cos(phi),
-        r * Math.sin(phi) * Math.sin(theta)
+  // ── v3: load clouds.glb and instance 45 copies around the globe ──────────
+  async _buildClouds(gltfLoader, R4) {
+    try {
+      const gltf = await new Promise((res, rej) =>
+        gltfLoader.load(R4 + 'clouds.glb', res, undefined, rej)
       );
+      const tmpl = gltf.scene;
 
-      const s = 0.28 + Math.random() * 0.18;
-      sp.scale.set(s, s * 0.55, 1);
-      this.cloudGroup.add(sp);
-      this._clouds.push(sp);
+      // Semi-transparent white cloud material
+      tmpl.traverse(m => {
+        if (!m.isMesh) return;
+        m.material = new THREE.MeshStandardMaterial({
+          color      : 0xeef4f8,
+          transparent: true,
+          opacity    : 0.55,
+          depthWrite : false,
+          roughness  : 1.0,
+          metalness  : 0.0,
+        });
+      });
+
+      // Auto-scale template → longest dimension = 0.22 (relative to earth R=1)
+      const bbox = new THREE.Box3().setFromObject(tmpl);
+      const dims = new THREE.Vector3();
+      bbox.getSize(dims);
+      const baseSf = 0.22 / Math.max(dims.x, dims.y, dims.z, 0.001);
+
+      const RADIUS = 1.13;
+      const COUNT  = 45;
+
+      for (let i = 0; i < COUNT; i++) {
+        const c   = tmpl.clone(true);
+        const phi = Math.acos(2 * Math.random() - 1);
+        const tht = Math.random() * Math.PI * 2;
+        const r   = RADIUS + Math.random() * 0.05;
+
+        c.position.set(
+          r * Math.sin(phi) * Math.cos(tht),
+          r * Math.cos(phi),
+          r * Math.sin(phi) * Math.sin(tht)
+        );
+        // Random scale variation + random rotation (clouds at any angle look natural)
+        c.scale.setScalar(baseSf * (0.5 + Math.random() * 1.0));
+        c.rotation.set(
+          Math.random() * Math.PI * 2,
+          Math.random() * Math.PI * 2,
+          Math.random() * Math.PI * 2
+        );
+
+        this.cloudGroup.add(c);
+        this._clouds.push(c);
+      }
+      console.log(`[GlobeScene] ${COUNT} cloud instances (GLB) ✓`);
+    } catch(e) {
+      console.warn('[GlobeScene] clouds.glb failed silently:', e.message);
     }
-    console.log(`[GlobeScene] ${this._clouds.length} cloud sprites ✓`);
   }
 
   startIntro() {
@@ -240,7 +259,6 @@ export class GlobeScene {
   }
 
   render() {
-    // this.renderer = WebGLRenderer, set in constructor, unchanged throughout
     this.renderer.render(this.scene, this.camera);
   }
 
